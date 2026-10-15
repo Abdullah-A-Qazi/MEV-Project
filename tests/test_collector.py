@@ -136,6 +136,17 @@ def test_recent_blocks_and_tags_are_not_cached(tmp_path):
     assert methods.count("eth_getBlockByNumber") == 2
 
 
+def test_traces_are_cached_only_when_their_block_is_known_and_final(tmp_path):
+    session = FakeSession()
+    rpc = make_client(tmp_path, session)
+    params = ["0x" + "ab" * 32, {"tracer": "callTracer"}]
+    rpc.call("debug_traceTransaction", params)  # block unknown: not cached
+    rpc.call("debug_traceTransaction", params, block=HEAD - 5)  # not final yet: not cached
+    rpc.call("debug_traceTransaction", params, block=HEAD - 1000)  # final: cached
+    rpc.call("debug_traceTransaction", params, block=HEAD - 1000)  # served from cache
+    assert [m for _, m in session.calls].count("debug_traceTransaction") == 3
+
+
 def test_uses_block_tag():
     assert uses_block_tag([{"to": "0x1"}, "latest"])
     assert uses_block_tag([{"fromBlock": "0x1", "toBlock": "latest"}])

@@ -142,8 +142,11 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
         traced = None
         if bundle.bundle_id in traced_ids:
             try:
-                traces = {h: trace_rpc.call("debug_traceTransaction", [h, {"tracer": "callTracer"}])
-                          for h in bundle.tx_hashes}  # fmt: skip
+                traces = {
+                    h: trace_rpc.call("debug_traceTransaction", [h, {"tracer": "callTracer"}],
+                                      block=bundle.block_number)
+                    for h in bundle.tx_hashes
+                }  # fmt: skip
                 traced = price_flows(account(*args, traces=traces), pricer, bundle.block_number)
             except (RpcError, ConnectionError, BudgetExhausted) as exc:
                 trace_failures += 1

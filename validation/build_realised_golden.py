@@ -102,7 +102,9 @@ def main() -> None:
             ):
                 receipt = receipts.loc[tx["tx_hash"]]
                 trace = rpc.call(
-                    "debug_traceTransaction", [tx["tx_hash"], {"tracer": "callTracer"}]
+                    "debug_traceTransaction",
+                    [tx["tx_hash"], {"tracer": "callTracer"}],
+                    block=block,
                 )
                 tx_logs = block_logs[
                     (block_logs["tx_hash"] == tx["tx_hash"])

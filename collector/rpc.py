@@ -158,7 +158,15 @@ class RpcClient:
 
     # -- public API --------------------------------------------------------------------
 
-    def call(self, method: str, params: list[Any] | None = None) -> Any:
+    def call(
+        self, method: str, params: list[Any] | None = None, *, block: int | None = None
+    ) -> Any:
+        """Send (or serve from cache) one request.
+
+        `block` is the block the request is about, for methods whose params and result do
+        not name one (e.g. debug_traceTransaction takes only a tx hash). Without it such
+        responses cannot be shown to be final and are never cached.
+        """
         params = params or []
         cacheable = method in CACHEABLE_METHODS and not uses_block_tag(params)
         if cacheable:
@@ -170,7 +178,7 @@ class RpcClient:
             raise OfflineMiss(f"{method} {params} not in cache (offline mode)")
 
         result, provider = self._send(method, params)
-        if cacheable and result is not None and self._is_final(method, params, result):
+        if cacheable and result is not None and self._is_final(method, params, result, block):
             self.cache.put(method, params, result, provider)
         return result
 
@@ -182,10 +190,14 @@ class RpcClient:
 
     # -- internals -----------------------------------------------------------------------
 
-    def _is_final(self, method: str, params: list[Any], result: Any) -> bool:
+    def _is_final(
+        self, method: str, params: list[Any], result: Any, hint: int | None = None
+    ) -> bool:
         if method == "eth_chainId":
             return True
         block = referenced_block(method, params, result)
+        if block is None:
+            block = hint
         if block is None:
             return False
         return block <= self.head() - FINALITY_DEPTH
