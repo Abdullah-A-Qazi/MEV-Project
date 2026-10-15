@@ -21,41 +21,16 @@ from dataclasses import asdict
 import pandas as pd
 
 from collector.cache import RpcCache
-from collector.credits import BudgetExhausted, CreditLedger
-from collector.pipeline import read_table
-from collector.pools import PoolInfo, fetch_pool_info
-from collector.rpc import OfflineMiss, RpcClient
+from collector.credits import CreditLedger
+from collector.rpc import RpcClient
 from common.config import Config, load_config
-from common.constants import UNISWAP_V2_SWAP_TOPIC, UNISWAP_V2_SYNC_TOPIC
 from detectors.arbitrage import detect_arbitrages
+from detectors.load import load_swaps
 from detectors.sandwich import detect_sandwiches
-from detectors.swaps import Swap, decode_v2_swaps
+from detectors.swaps import Swap
 from mitigation.victim_loss import victim_losses
 
 log = logging.getLogger("detectors")
-
-V2_TOPICS = [UNISWAP_V2_SWAP_TOPIC, UNISWAP_V2_SYNC_TOPIC]
-
-
-def load_pools(config: Config, logs: pd.DataFrame, rpc: RpcClient) -> dict[str, PoolInfo]:
-    path = config.processed_dir / "pools.parquet"
-    known: dict[str, PoolInfo] = {}
-    if path.exists():
-        for row in pd.read_parquet(path).to_dict("records"):
-            known[row["address"]] = PoolInfo(**row)
-
-    swaps = logs[logs["topic0"] == UNISWAP_V2_SWAP_TOPIC]
-    first_seen = swaps.groupby("address")["block_number"].min()
-    new = [(a, int(b)) for a, b in first_seen.items() if a not in known]
-    log.info("%d pools known, %d new", len(known), len(new))
-    for i, (address, block) in enumerate(new, 1):
-        try:
-            known[address] = fetch_pool_info(rpc, address, block)
-        except (BudgetExhausted, OfflineMiss) as exc:
-            log.warning("pool lookup stopped after %d/%d: %s", i - 1, len(new), exc)
-            break
-    pd.DataFrame([asdict(p) for p in known.values()]).to_parquet(path, index=False)
-    return known
 
 
 def _swap_row(swap: Swap, role: str) -> dict:
@@ -67,19 +42,17 @@ def _swap_row(swap: Swap, role: str) -> dict:
 
 
 def run(config: Config, rpc: RpcClient) -> dict[str, int]:
-    logs = read_table(config.processed_dir, "logs")
-    txs = read_table(config.processed_dir, "transactions")
-    if logs.empty:
-        raise SystemExit("no tables yet: run `python -m collector build` first")
-    tx_lookup = txs.set_index("tx_hash")[["from", "to"]].to_dict("index")
-    pools = load_pools(config, logs, rpc)
-
-    relevant = logs[logs["topic0"].isin(V2_TOPICS)].to_dict("records")
-    swaps = decode_v2_swaps(relevant, tx_lookup, pools, config.detectors.get("allowed_dexes"))
+    swaps, logs, _, pools = load_swaps(config, rpc)
     arbitrages = detect_arbitrages(swaps)
     tolerance = config.detectors.get("sandwich", {}).get("amount_tolerance", 0.2)
     sandwiches = detect_sandwiches(swaps, tolerance)
 
+    # A swap can be both a sandwich leg and part of an arbitrage cycle in the same tx (bots
+    # batch them). The swap keeps its sandwich role; the arbitrage is flagged so analyses can
+    # avoid counting that swap twice.
+    sandwich_legs = {(s.front.tx_hash, s.front.log_index) for s in sandwiches} | {
+        (s.back.tx_hash, s.back.log_index) for s in sandwiches
+    }
     roles: dict[tuple[str, int], str] = {}
     for arb in arbitrages:
         for idx in arb.log_indices:
@@ -135,6 +108,7 @@ def run(config: Config, rpc: RpcClient) -> dict[str, int]:
                 "gross_profit": str(a.gross_profit),
                 "pools": list(a.pools),
                 "n_swaps": len(a.pools),
+                "overlaps_sandwich": any((a.tx_hash, i) in sandwich_legs for i in a.log_indices),
             }
             for a in arbitrages
         ]

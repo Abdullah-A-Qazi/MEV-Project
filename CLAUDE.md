@@ -67,12 +67,16 @@ Key notes: `01 Project/Execution Standard.md`, `03 Methodology/RQ1–RQ3`, `04 B
 - Fixtures in `tests/fixtures/` are committed and record their provenance; CI never hits the network.
 
 ## Current status (15 Oct 2026)
-- [x] Build steps 1–4 first pass: scaffold, collector + cache + credit counter, V2 maths with
-      golden tests (48 real swaps, exact to the wei), arbitrage + sandwich detectors (V2 only),
-      victim loss, bootstrap-CI helper. Smoke run on blocks 17,200,000–17,200,015 found 49
-      sandwiches (mostly jaredfromsubway) and 0 V2-only arbitrages.
-- [ ] Week 1: RPC keys in `.env`, check credit costs vs dashboards, Mempool Dumpster sample,
-      fix the sampling window in `config.yaml`, then `make sample` and commit `sample_blocks.csv`.
-- [ ] Hand-check the real-block regression sandwiches on Etherscan (fill `hand_checked`).
-- [ ] Uniswap V3 decoding: likely needed early, since most 2023+ arbitrage touches V3 pools.
+- [x] Build steps 1–4 (first pass, Uniswap V2): scaffold, collector + cache + credit counter,
+      V2 maths (golden: 48 real swaps), arbitrage + sandwich detectors, victim loss.
+- [x] Step 5 (realised profit): per-bundle accounting, pre-block ETH pricing, traced sample
+      via keyless dRPC. Golden: 18 real (block, searcher) cases match balance changes exactly.
+- [~] Collection: sample fixed (Jan–Jun 2024, weekly, 300 blocks/day = 7,800 blocks, committed
+      in sample_blocks.csv). ~2,200 blocks cached on day 1; Infura only (no Alchemy account).
+- [ ] RQ1: analytical estimate (pre-block AMM replay) + Anvil simulation (needs Foundry).
+- [ ] RQ2: Mempool Dumpster matcher + coverage baseline. RQ3: slippage decoder + analysis.
+- [ ] Validation: hand-check `hand_checked` cases on Etherscan; labelled data; manual audit.
+- [ ] Uniswap V3 decoding (2024 arbitrage mostly touches V3, so pull it forward).
+- Infura has no trace methods on the free tier; traces come from dRPC (keyless) for a sample.
+- pandas 3 returns NaN, not None, for missing strings: use `common.nulls.is_missing`.
 - Deadline target: core build and first results for all RQs by 20 Dec 2026.

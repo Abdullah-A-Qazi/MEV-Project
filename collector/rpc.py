@@ -228,8 +228,9 @@ class RpcClient:
                 self._backoff(attempt)
                 continue
 
-            if response.status_code == 429 or response.status_code >= 500:
-                # Infura does not bill 429/5xx responses.
+            if response.status_code in (408, 429) or response.status_code >= 500:
+                # Timeouts, rate limits and server errors are transient; Infura does not
+                # bill 429/5xx responses.
                 self.ledger.refund(provider.name, provider.policy, method, cost)
                 if attempt == self.max_retries:
                     raise _Retryable(f"HTTP {response.status_code} from {provider.name}")

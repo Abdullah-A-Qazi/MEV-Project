@@ -24,7 +24,8 @@ The tool only detects and measures. It never sends transactions, and it needs no
 | Arbitrage detector (V2) | built, tested on synthetic cases |
 | Sandwich detector with victim identification (V2) | built, tested on synthetic cases and 3 real blocks |
 | Victim loss (counterfactual without the front-run) | built, tested |
-| Realised profit, Anvil simulation, mempool matcher, slippage decoder, V3 | not started |
+| Realised profit per MEV bundle, ETH pricing, traced sample (`profit/`) | built, golden-tested on 18 real searcher-blocks |
+| Analytical estimate, Anvil simulation, mempool matcher, slippage decoder, V3 | not started |
 
 ## Reproducing
 
@@ -43,6 +44,7 @@ make sample     # config.yaml sampling rule -> sample_blocks.csv (committed)
 make collect    # fetch block + receipts per sampled block into data/cache/ (spends credits)
 make data       # cache -> data/processed/*.parquet (offline)
 make detect     # detectors -> data/results/*.parquet (looks up each new pool once)
+make profit     # realised profit per bundle, with a traced sample (keyless dRPC)
 make results    # rebuild every result from the cache, with no network access
 ```
 
@@ -62,7 +64,10 @@ data/cache/rpc_cache.sqlite  ── raw responses + provider + fetch time (prove
 data/processed/{blocks,transactions,receipts,logs}/part-*.parquet
    │  detectors/ (swaps.py → arbitrage.py, sandwich.py; mitigation/victim_loss.py)
    ▼
-data/results/{swaps,arbitrages,sandwiches}.parquet → analysis/
+data/results/{swaps,arbitrages,sandwiches}.parquet
+   │  profit/ (bundles.py → realised.py + pricing.py)
+   ▼
+data/results/realised_profit.parquet → analysis/
 ```
 
 ### Key design decisions
@@ -86,6 +91,23 @@ data/results/{swaps,arbitrages,sandwiches}.parquet → analysis/
   went through Router02.
 - **The sandwich back-run must sell within ±20% of what the front-run bought.** This tolerance
   is set in `config.yaml` so results can be checked for sensitivity to it.
+- **Realised profit is measured per bundle, not per event.** Bots batch several sandwiches
+  and arbitrages into one transaction, and gas and token flows exist only per transaction.
+  Events that share a transaction form one bundle (`profit/bundles.py`). An arbitrage that
+  reuses a sandwich leg is flagged (`overlaps_sandwich`), so no swap is counted twice.
+- **Realised profit is the change in the searcher's holdings.** The searcher is its signing
+  EOAs plus its bot contract. Profit is ERC-20 transfers in and out, plus ETH transfers in
+  and out, minus gas. ETH and WETH count as one asset, so wrapping is ignored. On 18 real
+  (block, searcher) cases this reproduces the searcher's actual ETH + WETH balance change
+  exactly. All 37 other-token flows match their balance changes too.
+- **Builder tips sent as internal ETH transfers need traces.** Infura's free tier has no
+  trace methods, so all bundles get the untraced figure (an upper bound). A seeded sample
+  of 300 bundles is traced through the keyless dRPC endpoint to measure the gap. In one
+  2024 golden case the untraced figure was exactly 0.0344 ETH too high: the hidden tip.
+- **Token residuals are priced at the pre-block state.** Prices come from the token's WETH
+  pool before its first swap in the block, or from `getReserves()` at block − 1. Prices
+  taken after the MEV transactions would be biased by them. `realised_eth_only` (ETH +
+  WETH after gas) is always available, even when a dust residual cannot be priced.
 
 ### Known limitations (so far)
 
@@ -95,8 +117,11 @@ data/results/{swaps,arbitrages,sandwiches}.parquet → analysis/
   cycles interleaved with unrelated swaps.
 - Victim loss ignores liquidity changes (Mint/Burn) between the front-run and the victim.
   For exact-output victims, the loss is measured as missed output rather than extra input.
-- Alchemy compute-unit costs in `config.yaml` are estimates and still need checking against
-  the dashboard. Infura costs come from Infura's published table.
+- Alchemy compute-unit costs in `config.yaml` are estimates and are unused: the project runs
+  on Infura only. Infura costs come from Infura's published table.
+- Untraced realised profit misses internal ETH payments; only the traced sample includes them.
+- Residual tokens in pools under 1 ETH deep, or with no Uniswap V2 / SushiSwap WETH pair,
+  stay unpriced. Those bundles still have `realised_eth_only`.
 
 ## Tests and fixtures
 
@@ -106,14 +131,18 @@ data/results/{swaps,arbitrages,sandwiches}.parquet → analysis/
 - `tests/fixtures/real_blocks_17200000_17200002.json` freezes the V2 logs of three real blocks.
   It is a regression fixture: its expected sandwiches come from this detector and have not
   been hand-labelled yet.
-- Both fixtures record their source, build date and block range.
+- `tests/fixtures/realised_golden_{2023,2024}.json` hold 18 (block, searcher) cases from 8
+  searchers. Each has every transaction touching the searcher, its trace, and the
+  searcher's balances before and after the block. The accounting must match the balance
+  changes exactly. Rebuild with `python -m validation.build_realised_golden`.
+- All fixtures record their source, build date and block range.
 
 ## Layout
 
 ```
 collector/   RPC client, cache, credit ledger, sampler, pools, pipeline (python -m collector)
 detectors/   swap decoding, arbitrage, sandwich (python -m detectors)
-profit/      AMM maths (Uniswap V2 now; V3, realised profit and simulation to come)
+profit/      AMM maths, realised profit, ETH pricing, bundles (python -m profit)
 mitigation/  victim loss (slippage decoder and analysis to come)
 mempool/     Mempool Dumpster matcher (to come)
 validation/  fixture builders, labelled-data comparison and audit samples

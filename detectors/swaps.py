@@ -12,6 +12,7 @@ from typing import Any
 
 from collector.pools import PoolInfo
 from common.constants import UNISWAP_V2_SWAP_TOPIC, UNISWAP_V2_SYNC_TOPIC
+from common.nulls import is_missing
 from profit.uniswap_v2 import Reserves, reserves_before_swap
 
 
@@ -123,7 +124,7 @@ def decode_v2_swaps(
         if info.dex == "unknown" or (allowed is not None and info.dex not in allowed):
             continue
         words = _words(row["data"])
-        if len(words) != 4 or row["topic1"] is None or row["topic2"] is None:
+        if len(words) != 4 or is_missing(row["topic1"]) or is_missing(row["topic2"]):
             continue
         tx = txs.get(row["tx_hash"], {})
         swaps.append(
@@ -142,8 +143,8 @@ def decode_v2_swaps(
                 amount1_out=words[3],
                 sender=_topic_address(row["topic1"]),
                 recipient=_topic_address(row["topic2"]),
-                tx_from=(tx.get("from") or "").lower(),
-                tx_to=(tx.get("to") or None) and tx["to"].lower(),
+                tx_from="" if is_missing(tx.get("from")) else tx["from"].lower(),
+                tx_to=None if is_missing(tx.get("to")) else tx["to"].lower(),
                 # pop: a Sync belongs to exactly one Swap
                 reserves_after=last_sync.pop((row["tx_hash"], pool), None),
             )

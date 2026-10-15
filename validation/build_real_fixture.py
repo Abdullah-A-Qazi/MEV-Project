@@ -19,6 +19,7 @@ import pandas as pd
 from collector.pipeline import read_table
 from common.config import REPO_ROOT, load_config
 from common.constants import UNISWAP_V2_SWAP_TOPIC, UNISWAP_V2_SYNC_TOPIC
+from common.nulls import nulls_to_none
 
 
 def main() -> None:
@@ -44,6 +45,7 @@ def main() -> None:
         sandwiches.groupby(["block_number", "pool", "front_tx", "back_tx", "attacker"])["victim_tx"]
         .apply(sorted)
         .reset_index()
+        .pipe(nulls_to_none)
         .to_dict("records")
     )
     fixture = {
@@ -55,9 +57,12 @@ def main() -> None:
             "status": "regression (detector output), not hand-labelled",
         },
         "hand_checked": [],
-        "logs": logs.to_dict("records"),
-        "txs": {r["tx_hash"]: {"from": r["from"], "to": r["to"]} for r in txs.to_dict("records")},
-        "pools": pools.to_dict("records"),
+        "logs": logs.pipe(nulls_to_none).to_dict("records"),
+        "txs": {
+            r["tx_hash"]: {"from": r["from"], "to": r["to"]}
+            for r in txs.pipe(nulls_to_none).to_dict("records")
+        },
+        "pools": pools.pipe(nulls_to_none).to_dict("records"),
         "expected_sandwiches": [{**e, "block_number": int(e["block_number"])} for e in expected],
     }
     first, last = min(blocks), max(blocks)

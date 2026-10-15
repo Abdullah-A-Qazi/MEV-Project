@@ -97,3 +97,12 @@ detectors:
     # The back-run must sell between (1 - tol) and (1 + tol) of what the front-run bought.
     # Kept as a parameter so the sensitivity of results to it can be reported.
     amount_tolerance: 0.2
+
+# --- Realised profit (RQ1) -----------------------------------------------------------------
+profit:
+  # Bundles whose transactions are traced (debug_traceTransaction) to catch internal ETH
+  # transfers such as coinbase tips. Drawn with sample.seed.
+  trace_sample_size: 300
+  # WETH pairs thinner than this are not trusted as price sources. Mostly they value small
+  # token residuals (dust bots leave behind), so 1 ETH of depth is enough.
+  min_weth_reserve_eth: 1

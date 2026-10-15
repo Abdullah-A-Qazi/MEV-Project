@@ -55,7 +55,7 @@ class RpcCache:
     def __init__(self, path: Path | str):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path)
+        self._conn = sqlite3.connect(self.path, timeout=60)  # other processes may be writing
         self._conn.executescript(_SCHEMA)
 
     def get(self, method: str, params: list[Any]) -> Any | None:
