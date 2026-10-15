@@ -1,0 +1,21 @@
+# Secrets
+.env
+
+# Data: cache, tables and results are rebuilt with `make collect` / `make results`
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+.ipynb_checkpoints/

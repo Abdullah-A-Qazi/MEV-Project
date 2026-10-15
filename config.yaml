@@ -1,0 +1,99 @@
+# MEV Monitor configuration. Everything that affects results lives here, so a run can be
+# reproduced exactly from (this file + the committed block sample + the cached data).
+
+data_dir: data
+
+# --- RPC providers ----------------------------------------------------------------------
+# Tried in `provider_order`; a provider is skipped once its free-tier budget is used up.
+# URLs may reference environment variables from .env as ${NAME}; a provider whose
+# variables are missing is disabled automatically.
+provider_order: [infura, alchemy]
+
+providers:
+  infura:
+    url: https://mainnet.infura.io/v3/${INFURA_API_KEY}
+    # Core (free) plan: 3,000,000 credits/day, 500 credits/second.
+    limit: 3000000
+    period: day
+    safety_fraction: 0.95
+    credits_per_second: 500
+    default_cost: 80
+    # Source: https://docs.infura.io/get-started/pricing/credit-cost/ (checked 2026-10-15).
+    # Week 1: confirm against the Infura dashboard after a 100-block test run.
+    costs:
+      eth_blockNumber: 80
+      eth_chainId: 5
+      eth_call: 80
+      eth_getBlockByNumber: 80
+      eth_getBlockReceipts: 1000
+      eth_getLogs: 255
+      eth_getTransactionByHash: 80
+      eth_getTransactionReceipt: 80
+      eth_getCode: 80
+      eth_getStorageAt: 80
+      eth_getBalance: 80
+      debug_traceTransaction: 1000
+      trace_block: 300
+      trace_transaction: 300
+
+  alchemy:
+    url: https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}
+    # Free plan: 30,000,000 compute units per calendar month.
+    limit: 30000000
+    period: month
+    safety_fraction: 0.95
+    credits_per_second: null
+    default_cost: 26
+    # UNVERIFIED estimates of Alchemy compute units. Week 1: measure from the dashboard.
+    costs:
+      eth_blockNumber: 10
+      eth_chainId: 0
+      eth_call: 26
+      eth_getBlockByNumber: 16
+      eth_getBlockReceipts: 500
+      eth_getLogs: 75
+      eth_getTransactionByHash: 17
+      eth_getTransactionReceipt: 15
+      eth_getCode: 26
+
+  # Keyless public endpoint. Recent state only (no archive), so it is used for building
+  # test fixtures and quick experiments, never for the main collection.
+  publicnode:
+    url: https://ethereum-rpc.publicnode.com
+    limit: null
+    period: day
+    credits_per_second: 5
+    default_cost: 1
+
+  # Keyless dRPC endpoint: archive data, but eth_getLogs ranges must be small (~100
+  # blocks). Used for building test fixtures from historical blocks, not for collection.
+  drpc:
+    url: https://eth.drpc.org
+    limit: null
+    period: day
+    credits_per_second: 2
+    default_cost: 1
+
+# --- Block sample -------------------------------------------------------------------------
+# One UTC day every `every_n_days` between start and end, and `blocks_per_day` blocks drawn
+# uniformly at random (without replacement) from each day. `blocks_per_day: null` means
+# every block of the day. The resolved block numbers are written to sample_blocks.csv,
+# which is committed so the exact sample is part of the repo.
+#
+# TODO (week 1): fix the window. Mempool Dumpster coverage starts around late 2023.
+# The cap of ~2,700 blocks/day on Infura (1,080 credits per block) bounds the sample size.
+sample:
+  seed: 20261015
+  start_date: "2024-01-03"
+  end_date: "2024-06-26"
+  every_n_days: 7
+  blocks_per_day: 300
+
+# --- Detectors ------------------------------------------------------------------------------
+detectors:
+  # Only swaps on pools verified (by CREATE2 address) as belonging to these factories.
+  allowed_dexes: [uniswap_v2, sushiswap]
+  sandwich:
+    # The back-run must sell between (1 - tol) and (1 + tol) of what the front-run bought.
+    # Kept as a parameter so the sensitivity of results to it can be reported.
+    amount_tolerance: 0.2
