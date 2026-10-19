@@ -25,7 +25,12 @@ from collector.credits import BudgetExhausted, CreditLedger
 from collector.pipeline import read_table
 from collector.rpc import RpcClient, RpcError
 from common.config import Config, load_config
-from common.constants import ERC20_TRANSFER_TOPIC, PUBLIC_ROUTERS
+from common.constants import (
+    ERC20_TRANSFER_TOPIC,
+    PUBLIC_ROUTERS,
+    UNISWAP_V2_SWAP_TOPIC,
+    UNISWAP_V3_SWAP_TOPIC,
+)
 from common.nulls import is_missing
 from common.provenance import write_provenance
 from detectors.load import load_swaps
@@ -96,6 +101,28 @@ def price_flows(result: RealisedProfit, pricer: EthPricer, block: int) -> Realis
     )
 
 
+MEV_ROLES = ("arbitrage", "sandwich_front", "sandwich_back")
+SWAP_TOPICS = (UNISWAP_V2_SWAP_TOPIC, UNISWAP_V3_SWAP_TOPIC)
+
+
+def undetected_swap_counts(
+    logs: pd.DataFrame, detected_legs: set[tuple[str, int]]
+) -> dict[str, int]:
+    """Per tx: swap events (V2 or V3) that are not a leg of a detected MEV event.
+
+    A bundle is only fully explained when this is zero for all its transactions. Otherwise
+    its token flows include trades we did not decode (e.g. a sandwich leg on a Uniswap V3
+    pool whose other half sits in a transaction outside the bundle), so its realised profit
+    is not comparable and is left out of headline figures.
+    """
+    swaps = logs[logs["topic0"].isin(SWAP_TOPICS)]
+    counts: dict[str, int] = {}
+    for tx_hash, log_index in zip(swaps["tx_hash"], swaps["log_index"], strict=True):
+        if (tx_hash, int(log_index)) not in detected_legs:
+            counts[tx_hash] = counts.get(tx_hash, 0) + 1
+    return counts
+
+
 def _str(value: int | None) -> str | None:
     return None if value is None else str(value)
 
@@ -115,7 +142,14 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
     blocks = read_table(config.processed_dir, "blocks").set_index("block_number")
     receipts = read_table(config.processed_dir, "receipts").set_index("tx_hash")
     txs = txs[txs["tx_hash"].isin(bundle_txs)].set_index("tx_hash")
-    logs = logs[logs["tx_hash"].isin(bundle_txs) & (logs["topic0"] == ERC20_TRANSFER_TOPIC)]
+    swap_roles = pd.read_parquet(
+        results / "swaps.parquet", columns=["tx_hash", "log_index", "role"]
+    )
+    mev = swap_roles[swap_roles["role"].isin(MEV_ROLES)]
+    detected_legs = set(zip(mev["tx_hash"], mev["log_index"].astype(int), strict=True))
+    logs = logs[logs["tx_hash"].isin(bundle_txs)]
+    undetected = undetected_swap_counts(logs, detected_legs)
+    logs = logs[logs["topic0"] == ERC20_TRANSFER_TOPIC]
     logs_by_tx = {h: tuple(g.to_dict("records")) for h, g in logs.groupby("tx_hash")}
 
     profit_cfg = config.raw.get("profit", {})
@@ -159,6 +193,7 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
             "n_txs": len(bundle.tx_hashes),
             "n_sandwiches": bundle.count("sandwich"),
             "n_arbitrages": bundle.count("arbitrage"),
+            "undetected_swaps": sum(undetected.get(h, 0) for h in bundle.tx_hashes),
             "tx_hashes": list(bundle.tx_hashes),
             "actors": sorted(actors),
             "detector_gross": _str(detector_gross_eth(bundle, arbitrages, sandwiches, pricer)),
@@ -194,6 +229,7 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
     return {
         "bundles": len(bundles),
         "fully_priced": int(frame["realised_untraced"].notna().sum()) if rows else 0,
+        "fully_explained": int((frame["undetected_swaps"] == 0).sum()) if rows else 0,
         "traced": int(frame["traced"].sum()) if rows else 0,
         "trace_failures": trace_failures,
         "price_lookup_failures": pricer.lookup_failures,

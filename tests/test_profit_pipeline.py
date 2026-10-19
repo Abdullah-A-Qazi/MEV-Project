@@ -3,8 +3,8 @@
 import pandas as pd
 import pytest
 
-from common.constants import WETH
-from profit.__main__ import build_events, detector_gross_eth, price_flows
+from common.constants import UNISWAP_V2_SWAP_TOPIC, UNISWAP_V3_SWAP_TOPIC, WETH
+from profit.__main__ import build_events, detector_gross_eth, price_flows, undetected_swap_counts
 from profit.bundles import Event, group_into_bundles
 from profit.pricing import EthPricer
 from profit.realised import RealisedProfit
@@ -65,3 +65,14 @@ def test_price_flows_marks_unpriced_tokens():
     assert priced.realised_eth_only == 7
     no_tokens = price_flows(RealisedProfit(10, {}, 3, 1, 2, 0, False), EthPricer(), block=10)
     assert no_tokens.realised == 7 and no_tokens.revenue == 10
+
+
+def test_undetected_swaps_are_counted_per_transaction():
+    logs = pd.DataFrame([
+        {"tx_hash": A, "log_index": 1, "topic0": UNISWAP_V2_SWAP_TOPIC},  # detected leg
+        {"tx_hash": A, "log_index": 4, "topic0": UNISWAP_V3_SWAP_TOPIC},  # V3: not decoded
+        {"tx_hash": B, "log_index": 2, "topic0": UNISWAP_V2_SWAP_TOPIC},  # V2, not a leg
+        {"tx_hash": B, "log_index": 3, "topic0": "0xddf2"},  # a Transfer: ignored
+    ])  # fmt: skip
+    assert undetected_swap_counts(logs, {(A, 1)}) == {A: 1, B: 1}
+    assert undetected_swap_counts(logs, {(A, 1), (A, 4), (B, 2)}) == {}
