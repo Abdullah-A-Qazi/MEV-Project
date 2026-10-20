@@ -218,3 +218,37 @@ def test_first_block_at_or_after_binary_search(tmp_path):
     rpc = make_client(tmp_path, FakeSession(handler=handler))
     assert first_block_at_or_after(rpc, 1000 + 12 * 500, 0, 10_000) == 500
     assert first_block_at_or_after(rpc, 1000 + 12 * 500 + 1, 0, 10_000) == 501
+
+
+# --- local proxy for Anvil --------------------------------------------------------------------
+
+
+def test_proxy_forwards_through_the_cache(tmp_path):
+    import requests as real_requests
+
+    from collector.proxy import RpcProxy
+
+    session = FakeSession()
+    rpc = make_client(tmp_path, session)
+    with RpcProxy(rpc, fork_block=HEAD - 1000) as url:
+        payload = {"jsonrpc": "2.0", "id": 7, "method": "eth_getStorageAt",
+                   "params": ["0x" + "11" * 20, "0x0", hex(HEAD - 1000)]}  # fmt: skip
+        first = real_requests.post(url, json=payload, timeout=10).json()
+        second = real_requests.post(url, json=[payload], timeout=10).json()  # batch form
+    assert first["id"] == 7 and "result" in first
+    assert second[0]["result"] == first["result"]
+    assert [m for _, m in session.calls].count("eth_getStorageAt") == 1  # second was cached
+
+
+def test_proxy_passes_errors_back(tmp_path):
+    import requests as real_requests
+
+    from collector.proxy import RpcProxy
+
+    session = FakeSession(handler=lambda m, p: {"__error__": {"code": 3, "message": "revert"}})
+    rpc = make_client(tmp_path, session)
+    with RpcProxy(rpc) as url:
+        reply = real_requests.post(
+            url, json={"jsonrpc": "2.0", "id": 1, "method": "eth_call", "params": []}, timeout=10
+        ).json()
+    assert reply["error"]["message"] == "revert"

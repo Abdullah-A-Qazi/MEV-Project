@@ -34,6 +34,14 @@ from common.constants import (
 from common.nulls import is_missing
 from common.provenance import write_provenance
 from detectors.load import load_swaps
+from detectors.swaps import Swap
+from profit.analytical import (
+    estimate_arbitrage,
+    estimate_sandwich,
+    formula_arbitrage,
+    formula_sandwich,
+    pre_block_reserves,
+)
 from profit.bundles import Bundle, Event, group_into_bundles
 from profit.pricing import DEFAULT_MIN_WETH_RESERVE, EthPricer
 from profit.realised import RealisedProfit, TxData, account
@@ -44,47 +52,88 @@ USDC = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
 
 
 def build_events(arbitrages: pd.DataFrame, sandwiches: pd.DataFrame) -> list[Event]:
+    """One Event per detected arbitrage cycle and per sandwich (not per victim row)."""
     events = [
-        Event("arbitrage", f"{a['tx_hash']}:{a['start_token']}", int(a["block_number"]),
-              frozenset({a["tx_hash"]}))
+        Event("arbitrage", a["event_id"], int(a["block_number"]), frozenset({a["tx_hash"]}))
         for a in arbitrages.to_dict("records")
-    ]  # fmt: skip
+    ]
     if not sandwiches.empty:
-        unique = sandwiches.drop_duplicates(["front_tx", "back_tx", "pool"])
         events += [
-            Event("sandwich", f"{s['front_tx']}:{s['back_tx']}:{s['pool']}",
-                  int(s["block_number"]), frozenset({s["front_tx"], s["back_tx"]}))
-            for s in unique.to_dict("records")
+            Event("sandwich", s["event_id"], int(s["block_number"]),
+                  frozenset({s["front_tx"], s["back_tx"]}))
+            for s in sandwiches.drop_duplicates("event_id").to_dict("records")
         ]  # fmt: skip
     return events
 
 
-def detector_gross_eth(
-    bundle: Bundle, arbitrages: pd.DataFrame, sandwiches: pd.DataFrame, pricer: EthPricer
-) -> int | None:
-    """Gross profit implied by the detected swaps alone, in wei (None if unpriceable).
+# Per-event amount: (token, raw amount); SKIP = left out on purpose (an arbitrage that reuses
+# a sandwich leg, so no swap is counted twice); None = could not be computed.
+SKIP = "skip"
+Amounts = dict[str, tuple[str, int] | str | None]
 
-    Arbitrages that reuse a sandwich leg are left out, so no swap is counted twice.
-    """
+
+def event_amounts(arbitrages: pd.DataFrame, sandwiches: pd.DataFrame) -> Amounts:
+    """event_id -> (token, gross profit in raw units) as the detected swaps imply it."""
+    amounts: Amounts = {}
+    for a in arbitrages.to_dict("records"):
+        amounts[a["event_id"]] = (
+            SKIP if a["overlaps_sandwich"] else (a["start_token"], int(a["gross_profit"]))
+        )
+    for s in sandwiches.drop_duplicates("event_id").to_dict("records"):
+        amounts[s["event_id"]] = (s["token_x"], int(s["attacker_gross_profit_x"]))
+    return amounts
+
+
+def estimated_amounts(
+    arbitrages: pd.DataFrame, sandwiches: pd.DataFrame, swaps: list[Swap]
+) -> tuple[Amounts, Amounts]:
+    """(pre-block estimates, at-execution formula values) per event, in raw token units."""
+    by_leg = {(s.tx_hash, s.log_index): s for s in swaps}
+    pre = pre_block_reserves(swaps)
+    estimates: Amounts = {}
+    formulas: Amounts = {}
+
+    def put(event_id: str, token: str, estimate: int | None, formula: int | None) -> None:
+        estimates[event_id] = None if estimate is None else (token, estimate)
+        formulas[event_id] = None if formula is None else (token, formula)
+
+    for a in arbitrages.to_dict("records"):
+        if a["overlaps_sandwich"]:
+            estimates[a["event_id"]] = formulas[a["event_id"]] = SKIP
+            continue
+        cycle = [by_leg.get((a["tx_hash"], int(i))) for i in a["log_indices"]]
+        if None in cycle:
+            put(a["event_id"], a["start_token"], None, None)
+            continue
+        put(a["event_id"], a["start_token"], estimate_arbitrage(cycle, pre),
+            formula_arbitrage(cycle))  # fmt: skip
+    for event_id, group in sandwiches.groupby("event_id"):
+        first = group.iloc[0]
+        front = by_leg.get((first["front_tx"], int(first["front_log_index"])))
+        back = by_leg.get((first["back_tx"], int(first["back_log_index"])))
+        victims = [by_leg.get((v["victim_tx"], int(v["victim_log_index"])))
+                   for v in group.to_dict("records")]  # fmt: skip
+        if front is None or back is None or None in victims:
+            put(event_id, first["token_x"], None, None)
+            continue
+        put(event_id, first["token_x"], estimate_sandwich(front, victims, back, pre),
+            formula_sandwich(front, back))  # fmt: skip
+    return estimates, formulas
+
+
+def bundle_value(bundle: Bundle, amounts: Amounts, pricer: EthPricer) -> int | None:
+    """Sum of the bundle's per-event amounts in wei (None if any is missing or unpriceable)."""
     total = 0
     for event in bundle.events:
-        if event.kind == "arbitrage":
-            tx_hash, token = event.event_id.split(":")
-            rows = arbitrages[
-                (arbitrages["tx_hash"] == tx_hash) & (arbitrages["start_token"] == token)
-            ]
-            amounts = [(token, int(r["gross_profit"])) for r in rows.to_dict("records")
-                       if not r["overlaps_sandwich"]]  # fmt: skip
-        else:
-            front, back, pool = event.event_id.split(":")
-            row = sandwiches[(sandwiches["front_tx"] == front) & (sandwiches["back_tx"] == back)
-                             & (sandwiches["pool"] == pool)].iloc[0]  # fmt: skip
-            amounts = [(row["token_x"], int(row["attacker_gross_profit_x"]))]
-        for token, amount in amounts:
-            value = pricer.wei_value(token, amount, bundle.block_number)
-            if value is None:
-                return None
-            total += value
+        entry = amounts.get(event.event_id)
+        if entry == SKIP:
+            continue
+        if entry is None:
+            return None
+        value = pricer.wei_value(entry[0], entry[1], bundle.block_number)
+        if value is None:
+            return None
+        total += value
     return total
 
 
@@ -132,13 +181,13 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
     arbitrages = pd.read_parquet(results / "arbitrages.parquet")
     sandwiches = pd.read_parquet(results / "sandwiches.parquet")
     bundles = group_into_bundles(build_events(arbitrages, sandwiches))
+    detected = event_amounts(arbitrages, sandwiches)
     bundle_txs = {h for b in bundles for h in b.tx_hashes}
 
     swaps, logs, txs, _ = load_swaps(config, rpc)
+    estimated, formula = estimated_amounts(arbitrages, sandwiches, swaps)
     min_reserve = int(config.raw.get("profit", {}).get("min_weth_reserve_eth", 10) * 10**18)
-    pricer = EthPricer(
-        swaps, rpc if not rpc.offline else None, min_reserve or DEFAULT_MIN_WETH_RESERVE
-    )
+    pricer = EthPricer(swaps, rpc, min_reserve or DEFAULT_MIN_WETH_RESERVE)
     blocks = read_table(config.processed_dir, "blocks").set_index("block_number")
     receipts = read_table(config.processed_dir, "receipts").set_index("tx_hash")
     txs = txs[txs["tx_hash"].isin(bundle_txs)].set_index("tx_hash")
@@ -196,7 +245,9 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
             "undetected_swaps": sum(undetected.get(h, 0) for h in bundle.tx_hashes),
             "tx_hashes": list(bundle.tx_hashes),
             "actors": sorted(actors),
-            "detector_gross": _str(detector_gross_eth(bundle, arbitrages, sandwiches, pricer)),
+            "detector_gross": _str(bundle_value(bundle, detected, pricer)),
+            "analytical_estimate": _str(bundle_value(bundle, estimated, pricer)),
+            "formula_at_execution": _str(bundle_value(bundle, formula, pricer)),
             "eth_flow": str(untraced.eth_flow),
             "token_flows": json.dumps({k: str(v) for k, v in untraced.token_flows.items()}),
             "token_value": _str(untraced.token_value_eth),
@@ -221,7 +272,8 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
         results / "realised_profit.PROVENANCE.json",
         dataset="realised profit per MEV bundle",
         blocks=[b.block_number for b in bundles],
-        extra={"trace_provider": trace_rpc.providers[0].name if trace_rpc else None,
+        extra={"trace_provider": (trace_rpc.providers[0].name if trace_rpc.providers
+                                  else "cache") if trace_rpc else None,
                "trace_sample_size": sample_size, "trace_failures": trace_failures,
                "price_lookup_failures": pricer.lookup_failures},
     )  # fmt: skip
@@ -248,11 +300,11 @@ def main() -> None:
     cache, ledger = RpcCache(config.cache_path), CreditLedger(config.ledger_path)
     providers = [] if args.offline else config.providers(args.provider)
     rpc = RpcClient(providers, cache, ledger, offline=args.offline or not providers, max_retries=8)
-    trace_rpc = (
-        RpcClient(config.providers([args.trace_provider]), cache, ledger, max_retries=8)
-        if args.trace_provider
-        else None
-    )
+    # Offline with a trace provider named: rebuild the traced sample from cached traces only.
+    trace_rpc = None
+    if args.trace_provider:
+        trace_providers = [] if args.offline else config.providers([args.trace_provider])
+        trace_rpc = RpcClient(trace_providers, cache, ledger, max_retries=8, offline=args.offline)
     print(json.dumps(run(config, rpc, trace_rpc), indent=1))
 
 

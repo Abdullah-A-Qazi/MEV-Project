@@ -25,7 +25,17 @@ The tool only detects and measures. It never sends transactions, and it needs no
 | Sandwich detector with victim identification (V2) | built, tested on synthetic cases and 3 real blocks |
 | Victim loss (counterfactual without the front-run) | built, tested |
 | Realised profit per MEV bundle, ETH pricing, traced sample (`profit/`) | built, golden-tested on 18 real searcher-blocks |
-| Analytical estimate, Anvil simulation, mempool matcher, slippage decoder, V3 | not started |
+| RQ1 analytical estimate (pre-block replay) and at-execution formula (`profit/analytical.py`) | built, tested |
+| RQ1 Anvil simulation through a caching local proxy (`profit/simulate.py`, `collector/proxy.py`) | built; proxy tested; not yet run (needs Foundry) |
+| RQ2 Mempool Dumpster download, index, visibility table, coverage baseline (`mempool/`) | built, run on the full sample |
+| RQ3 slippage decoder: Router02, SushiSwap router, Universal Router (`mitigation/slippage.py`) | built; 3 of ~61,000 decoded swaps break their own limit |
+| RQ3 safe-slippage threshold (`mitigation/safe_threshold.py`) | built, tested against brute force |
+| Analyses and figures for RQ1–RQ3 (`analysis/rq1.py`, `rq2.py`, `rq3.py`) | built, run on the full sample |
+| Manual audit sheets and scoring (`validation/audit.py`, `validation/labels/`) | built; labelling not done |
+| Uniswap V3 decoding | not started |
+
+Headline results, figures and their inputs are rebuilt by `make results` into
+`data/results/` (`rq1_summary.json`, `rq2_summary.json`, `rq3_summary.json`, `figures/`).
 
 ## Reproducing
 
@@ -45,7 +55,10 @@ make collect    # fetch block + receipts per sampled block into data/cache/ (spe
 make data       # cache -> data/processed/*.parquet (offline)
 make detect     # detectors -> data/results/*.parquet (looks up each new pool once)
 make profit     # realised profit per bundle, with a traced sample (keyless dRPC)
-make results    # rebuild every result from the cache, with no network access
+make mempool    # download Mempool Dumpster days for the sample (about 6 GB) and index them
+make simulate   # replay sampled sandwiches on a local Anvil fork (needs Foundry, see below)
+make audit      # write the hand-labelling sheets into validation/labels/
+make results    # rebuild every result and figure from the cache, with no network access
 ```
 
 `make collect` stops before the daily credit cap and can be rerun at any time: cached blocks
@@ -109,9 +122,26 @@ data/results/realised_profit.parquet → analysis/
   taken after the MEV transactions would be biased by them. `realised_eth_only` (ETH +
   WETH after gas) is always available, even when a dust residual cannot be priced.
 
+- **RQ1's gap is split exactly.** Pre-block estimate − realised = state drift (other
+  transactions moved the pool first) + execution shortfall (the trade took less than the
+  formula allows) + unmodelled flows (leftover tokens) + base fee + priority fee + direct
+  tips. With nothing else in the block, drift is exactly zero (tested).
+- **RQ2 counts a transaction as public only if seen strictly before its block's timestamp,**
+  and corrects private shares with the miss rate on plain ETH transfers (6.0%). Builder
+  payouts, which never go through the mempool, are excluded from that baseline.
+- **RQ3 matches a router limit to the last swap on its token pair in the transaction.** Tax
+  tokens sell their own tax in the same pool just before the user's swap; this rule makes
+  the router's guarantee hold on all but 3 of about 61,000 decoded swaps.
+- **The safe threshold uses gas only as the attacker's cost,** so it is a lower bound on the
+  true break-even tolerance.
+- **Anvil reads mainnet through a local proxy** (`collector/proxy.py`), so simulation state
+  reads are cached and counted like every other request.
+
 ### Known limitations (so far)
 
-- Only V2-style pools are decoded. Arbitrage that touches a Uniswap V3 pool is not found yet.
+- Only V2-style pools are decoded. Arbitrage that touches a Uniswap V3 pool is not found yet,
+  and 1,478 of 4,158 bundles contain swaps the detectors do not explain (V3 legs and others),
+  so they are left out of realised-profit figures.
   In the April 2023 smoke run this probably explains why no arbitrage was detected.
 - The arbitrage detector finds contiguous cycles only. It misses split-route arbitrage and
   cycles interleaved with unrelated swaps.
@@ -120,6 +150,10 @@ data/results/realised_profit.parquet → analysis/
 - Alchemy compute-unit costs in `config.yaml` are estimates and are unused: the project runs
   on Infura only. Infura costs come from Infura's published table.
 - Untraced realised profit misses internal ETH payments; only the traced sample includes them.
+- RQ3 is observational: private-RPC users may trade differently from public users. The
+  regression controls for trade size, not for who the trader is.
+- Only 37.5% of user swaps are decoded (single-hop Router02 / Universal Router calls);
+  aggregators and multi-hop trades are not.
 - Residual tokens in pools under 1 ETH deep, or with no Uniswap V2 / SushiSwap WETH pair,
   stay unpriced. Those bundles still have `realised_eth_only`.
 

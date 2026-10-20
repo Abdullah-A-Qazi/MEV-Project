@@ -173,3 +173,25 @@ def test_normalise_block_flattens_everything():
     assert rows["transactions"][0]["value"] == str(10**18)  # uint256 kept exact as text
     assert rows["receipts"][0]["gas_used"] == 21_000
     assert rows["logs"][0]["topic0"] == "0xt0" and rows["logs"][0]["topic1"] is None
+
+
+def test_detectors_refuse_to_run_with_unresolved_pools(tmp_path):
+    """A pool that cannot be looked up must stop the run, not silently drop its swaps."""
+    import pandas as pd
+    import pytest
+
+    from collector.cache import RpcCache
+    from collector.credits import CreditLedger
+    from collector.rpc import RpcClient
+    from common.config import Config
+    from detectors.load import IncompletePools, load_pools
+
+    config = Config(raw={"data_dir": "data"}, root=tmp_path)
+    config.processed_dir.mkdir(parents=True)
+    logs = pd.DataFrame([{"topic0": UNISWAP_V2_SWAP_TOPIC, "address": "0x" + "11" * 20,
+                          "block_number": 5}])  # fmt: skip
+    offline = RpcClient([], RpcCache(tmp_path / "c.sqlite"), CreditLedger(tmp_path / "l.sqlite"),
+                        offline=True)  # fmt: skip
+    with pytest.raises(IncompletePools):
+        load_pools(config, logs, offline)
+    assert load_pools(config, logs, offline, allow_missing=True) == {}

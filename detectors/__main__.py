@@ -24,13 +24,23 @@ from collector.cache import RpcCache
 from collector.credits import CreditLedger
 from collector.rpc import RpcClient
 from common.config import Config, load_config
-from detectors.arbitrage import detect_arbitrages
+from detectors.arbitrage import Arbitrage, detect_arbitrages
 from detectors.load import load_swaps
-from detectors.sandwich import detect_sandwiches
+from detectors.sandwich import Sandwich, detect_sandwiches
 from detectors.swaps import Swap
 from mitigation.victim_loss import victim_losses
 
 log = logging.getLogger("detectors")
+
+
+def arbitrage_event_id(a: Arbitrage) -> str:
+    """Unique per cycle: one transaction can hold several cycles."""
+    return f"arb:{a.tx_hash}:{a.log_indices[0]}"
+
+
+def sandwich_event_id(s: Sandwich) -> str:
+    """Unique per sandwich: its front-run swap and back-run swap."""
+    return f"sw:{s.front.tx_hash}:{s.front.log_index}:{s.back.tx_hash}:{s.back.log_index}"
 
 
 def _swap_row(swap: Swap, role: str) -> dict:
@@ -41,8 +51,8 @@ def _swap_row(swap: Swap, role: str) -> dict:
     return row
 
 
-def run(config: Config, rpc: RpcClient) -> dict[str, int]:
-    swaps, logs, _, pools = load_swaps(config, rpc)
+def run(config: Config, rpc: RpcClient, allow_missing_pools: bool = False) -> dict[str, int]:
+    swaps, logs, _, pools = load_swaps(config, rpc, allow_missing_pools)
     arbitrages = detect_arbitrages(swaps)
     tolerance = config.detectors.get("sandwich", {}).get("amount_tolerance", 0.2)
     sandwiches = detect_sandwiches(swaps, tolerance)
@@ -76,9 +86,13 @@ def run(config: Config, rpc: RpcClient) -> dict[str, int]:
                     "block_number": s.block_number,
                     "pool": s.pool,
                     "attacker": s.attacker,
+                    "event_id": sandwich_event_id(s),
                     "front_tx": s.front.tx_hash,
+                    "front_log_index": s.front.log_index,
                     "back_tx": s.back.tx_hash,
+                    "back_log_index": s.back.log_index,
                     "victim_tx": victim.tx_hash,
+                    "victim_log_index": victim.log_index,
                     "victim_from": victim.tx_from,
                     "token_x": s.token_x,
                     "token_y": s.token_y,
@@ -102,7 +116,9 @@ def run(config: Config, rpc: RpcClient) -> dict[str, int]:
     pd.DataFrame(
         [
             {
+                "event_id": arbitrage_event_id(a),
                 **{k: v for k, v in asdict(a).items() if k not in ("pools", "log_indices")},
+                "log_indices": list(a.log_indices),
                 "amount_in": str(a.amount_in),
                 "amount_out": str(a.amount_out),
                 "gross_profit": str(a.gross_profit),
@@ -130,6 +146,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m detectors")
     parser.add_argument("--offline", action="store_true", help="never call the network")
     parser.add_argument("--provider", nargs="+", help="provider names for pool lookups")
+    parser.add_argument(
+        "--allow-missing-pools",
+        action="store_true",
+        help="run even if some pools could not be looked up (undercounts MEV)",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -141,7 +162,7 @@ def main() -> None:
         CreditLedger(config.ledger_path),
         offline=args.offline or not providers,
     )
-    print(json.dumps(run(config, rpc), indent=1))
+    print(json.dumps(run(config, rpc, args.allow_missing_pools), indent=1))
 
 
 if __name__ == "__main__":

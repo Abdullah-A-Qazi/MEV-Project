@@ -80,8 +80,8 @@ providers:
 # every block of the day. The resolved block numbers are written to sample_blocks.csv,
 # which is committed so the exact sample is part of the repo.
 #
-# TODO (week 1): fix the window. Mempool Dumpster coverage starts around late 2023.
-# The cap of ~2,700 blocks/day on Infura (1,080 credits per block) bounds the sample size.
+# Window chosen 15 Oct 2026: within Mempool Dumpster's coverage (from late 2023). The cap of
+# about 2,600 blocks a day on Infura (1,080 credits per block) bounds the sample size.
 sample:
   seed: 20261015
   start_date: "2024-01-03"
@@ -106,3 +106,6 @@ profit:
   # WETH pairs thinner than this are not trusted as price sources. Mostly they value small
   # token residuals (dust bots leave behind), so 1 ETH of depth is enough.
   min_weth_reserve_eth: 1
+  # Bundles replayed on a local Anvil fork (python -m profit.simulate). Each costs roughly
+  # 5-20k Infura credits the first time (state reads), nothing afterwards (cached).
+  simulation_sample_size: 100

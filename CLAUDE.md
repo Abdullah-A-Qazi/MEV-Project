@@ -66,17 +66,19 @@ Key notes: `01 Project/Execution Standard.md`, `03 Methodology/RQ1–RQ3`, `04 B
 - Pools are trusted only after a CREATE2 address check against a known factory (`collector/pools.py`).
 - Fixtures in `tests/fixtures/` are committed and record their provenance; CI never hits the network.
 
-## Current status (15 Oct 2026)
-- [x] Build steps 1–4 (first pass, Uniswap V2): scaffold, collector + cache + credit counter,
-      V2 maths (golden: 48 real swaps), arbitrage + sandwich detectors, victim loss.
-- [x] Step 5 (realised profit): per-bundle accounting, pre-block ETH pricing, traced sample
-      via keyless dRPC. Golden: 18 real (block, searcher) cases match balance changes exactly.
-- [~] Collection: sample fixed (Jan–Jun 2024, weekly, 300 blocks/day = 7,800 blocks, committed
-      in sample_blocks.csv). ~2,200 blocks cached on day 1; Infura only (no Alchemy account).
-- [ ] RQ1: analytical estimate (pre-block AMM replay) + Anvil simulation (needs Foundry).
-- [ ] RQ2: Mempool Dumpster matcher + coverage baseline. RQ3: slippage decoder + analysis.
-- [ ] Validation: hand-check `hand_checked` cases on Etherscan; labelled data; manual audit.
-- [ ] Uniswap V3 decoding (2024 arbitrage mostly touches V3, so pull it forward).
-- Infura has no trace methods on the free tier; traces come from dRPC (keyless) for a sample.
+## Current status (20 Oct 2026)
+- [x] Steps 1–5: collector, V2 maths (golden), detectors, victim loss, realised profit
+      (golden vs balances), bundle completeness flag, detector refuses partial pool data.
+- [x] Collection complete: 7,800 blocks (Jan–Jun 2024, weekly, 300/day), Infura only.
+- [x] RQ1 analytical: pre-block estimate + at-execution formula; exact gap decomposition
+      (`analysis/rq1.py`). [ ] Anvil simulation: code + caching proxy done, run after Foundry
+      install (`make simulate`).
+- [x] RQ2: Mempool Dumpster (52 days, 6 GB) indexed; visibility table; coverage baseline
+      (6.0% miss); `analysis/rq2.py`.
+- [x] RQ3: slippage decoder (Router02, Sushi, Universal Router), user-swap dataset, safe
+      threshold, regression, avoidable-loss shares (`analysis/rq3.py`).
+- [ ] Validation: label `validation/labels/*.csv` (user), then `python -m validation.audit score`.
+- [ ] Uniswap V3 decoding (explains the 1,478 excluded bundles and V3 arbitrage).
+- `make results` rebuilds everything offline (about 6 minutes); traces and prices come from cache.
 - pandas 3 returns NaN, not None, for missing strings: use `common.nulls.is_missing`.
 - Deadline target: core build and first results for all RQs by 20 Dec 2026.

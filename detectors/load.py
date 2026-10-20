@@ -19,8 +19,17 @@ log = logging.getLogger(__name__)
 V2_TOPICS = [UNISWAP_V2_SWAP_TOPIC, UNISWAP_V2_SYNC_TOPIC]
 
 
-def load_pools(config: Config, logs: pd.DataFrame, rpc: RpcClient) -> dict[str, PoolInfo]:
-    """Pool metadata, looking up (once) any pool not yet in data/processed/pools.parquet."""
+class IncompletePools(RuntimeError):
+    """Some pools in the sample could not be looked up, so their swaps would be missed."""
+
+
+def load_pools(
+    config: Config, logs: pd.DataFrame, rpc: RpcClient, allow_missing: bool = False
+) -> dict[str, PoolInfo]:
+    """Pool metadata, looking up (once) any pool not yet in data/processed/pools.parquet.
+
+    Raises IncompletePools if any lookup could not be made, unless `allow_missing`.
+    """
     path = config.processed_dir / "pools.parquet"
     known: dict[str, PoolInfo] = {}
     if path.exists():
@@ -33,18 +42,27 @@ def load_pools(config: Config, logs: pd.DataFrame, rpc: RpcClient) -> dict[str, 
     first_seen = swaps.groupby("address")["block_number"].min()
     new = [(a, int(b)) for a, b in first_seen.items() if a not in known]
     log.info("%d pools known, %d new", len(known), len(new))
+    missing = 0
     for i, (address, block) in enumerate(new, 1):
         try:
             known[address] = fetch_pool_info(rpc, address, block)
         except (BudgetExhausted, OfflineMiss) as exc:
+            missing = len(new) - (i - 1)
             log.warning("pool lookup stopped after %d/%d: %s", i - 1, len(new), exc)
             break
     pd.DataFrame([asdict(p) for p in known.values()]).to_parquet(path, index=False)
+    if missing and not allow_missing:
+        # Swaps on unresolved pools would be silently dropped, undercounting MEV. A first
+        # partial run missed about a third of sandwiches this way, so refuse instead.
+        raise IncompletePools(
+            f"{missing} pools could not be looked up (budget or offline). Rerun when credits "
+            "are available, or pass allow_missing=True to accept an undercount."
+        )
     return known
 
 
 def load_swaps(
-    config: Config, rpc: RpcClient
+    config: Config, rpc: RpcClient, allow_missing_pools: bool = False
 ) -> tuple[list[Swap], pd.DataFrame, pd.DataFrame, dict[str, PoolInfo]]:
     """(decoded V2 swaps, logs table, transactions table, pool metadata)."""
     logs = read_table(config.processed_dir, "logs")
@@ -52,7 +70,7 @@ def load_swaps(
     if logs.empty:
         raise SystemExit("no tables yet: run `python -m collector build` first")
     tx_lookup = txs.set_index("tx_hash")[["from", "to"]].to_dict("index")
-    pools = load_pools(config, logs, rpc)
+    pools = load_pools(config, logs, rpc, allow_missing_pools)
     relevant = logs[logs["topic0"].isin(V2_TOPICS)].to_dict("records")
     swaps = decode_v2_swaps(relevant, tx_lookup, pools, config.detectors.get("allowed_dexes"))
     return swaps, logs, txs, pools

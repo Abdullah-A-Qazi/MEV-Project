@@ -16,7 +16,7 @@ from collections.abc import Iterable
 
 from collector.credits import BudgetExhausted
 from collector.pools import create2_pair_address
-from collector.rpc import RpcClient, RpcError
+from collector.rpc import OfflineMiss, RpcClient, RpcError
 from common.constants import V2_FACTORIES, WETH, function_selector
 from detectors.swaps import Swap
 from profit.uniswap_v2 import Reserves
@@ -69,9 +69,10 @@ class EthPricer:
                 )
             except RpcError:
                 continue
-            except (ConnectionError, BudgetExhausted):
-                # Network trouble: leave the token unpriced rather than abort the whole run.
-                # Rerunning later retries it (successful lookups are cached).
+            except (ConnectionError, BudgetExhausted, OfflineMiss):
+                # Network trouble, or offline and never fetched: leave the token unpriced
+                # rather than abort the run. Successful lookups are cached, so an offline
+                # rebuild reproduces every price an online run found.
                 self.lookup_failures += 1
                 return None
             if not result or len(result) < 2 + 64 * 2:

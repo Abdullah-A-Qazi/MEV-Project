@@ -32,9 +32,18 @@ class Pool:
         tx_hash: str | None = None,
         block: int = 100,
         log_index: int | None = None,
+        take: float = 1.0,
     ) -> Swap:
+        """`take` < 1 requests less than the formula's maximum output (as bots often do)."""
         zero_for_one = token_in == self.token0
-        self.reserves, out = apply_swap(self.reserves, amount_in, zero_for_one)
+        before = self.reserves
+        _, max_out = apply_swap(before, amount_in, zero_for_one)
+        out = max_out * round(take * 10_000) // 10_000  # exact integer maths
+        self.reserves = (
+            Reserves(before.reserve0 + amount_in, before.reserve1 - out)
+            if zero_for_one
+            else Reserves(before.reserve0 - out, before.reserve1 + amount_in)
+        )
         return Swap(
             block_number=block,
             tx_index=tx_index,

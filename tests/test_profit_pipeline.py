@@ -4,7 +4,13 @@ import pandas as pd
 import pytest
 
 from common.constants import UNISWAP_V2_SWAP_TOPIC, UNISWAP_V3_SWAP_TOPIC, WETH
-from profit.__main__ import build_events, detector_gross_eth, price_flows, undetected_swap_counts
+from profit.__main__ import (
+    build_events,
+    bundle_value,
+    event_amounts,
+    price_flows,
+    undetected_swap_counts,
+)
 from profit.bundles import Event, group_into_bundles
 from profit.pricing import EthPricer
 from profit.realised import RealisedProfit
@@ -34,14 +40,15 @@ def test_events_sharing_a_transaction_across_blocks_is_an_error():
 
 def sandwich_rows():
     # One sandwich with two victims -> two rows that must become one event.
-    base = {"block_number": 10, "pool": "0xp", "front_tx": A, "back_tx": B, "token_x": WETH,
-            "attacker_gross_profit_x": "500"}  # fmt: skip
+    base = {"event_id": "sw:1", "block_number": 10, "pool": "0xp", "front_tx": A, "back_tx": B,
+            "token_x": WETH, "attacker_gross_profit_x": "500"}  # fmt: skip
     return pd.DataFrame([{**base, "victim_tx": C}, {**base, "victim_tx": D}])
 
 
 def arbitrage_rows(overlaps: bool):
-    return pd.DataFrame([{"block_number": 10, "tx_hash": B, "start_token": WETH,
-                          "gross_profit": "300", "overlaps_sandwich": overlaps}])  # fmt: skip
+    return pd.DataFrame([{"event_id": "arb:1", "block_number": 10, "tx_hash": B,
+                          "start_token": WETH, "gross_profit": "300",
+                          "overlaps_sandwich": overlaps}])  # fmt: skip
 
 
 def test_build_events_dedupes_victim_rows():
@@ -53,7 +60,7 @@ def test_build_events_dedupes_victim_rows():
 def test_detector_gross_skips_arbitrages_that_reuse_a_sandwich_leg(overlaps, expected):
     arbs, sands = arbitrage_rows(overlaps), sandwich_rows()
     [bundle] = group_into_bundles(build_events(arbs, sands))
-    assert detector_gross_eth(bundle, arbs, sands, EthPricer()) == expected
+    assert bundle_value(bundle, event_amounts(arbs, sands), EthPricer()) == expected
 
 
 def test_price_flows_marks_unpriced_tokens():

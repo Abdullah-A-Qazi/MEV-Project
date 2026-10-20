@@ -51,3 +51,27 @@ def summarise(values: Sequence[float], seed: int = 0, n_resamples: int = 10_000)
         median_ci=bootstrap_ci(data, np.median, seed=seed, n_resamples=n_resamples),
         mean_ci=bootstrap_ci(data, np.mean, seed=seed, n_resamples=n_resamples),
     )
+
+
+def proportion_ci(successes: int, n: int, confidence: float = 0.95) -> tuple[float, float]:
+    """Wilson score interval for a proportion: well behaved near 0 and 1, cheap for large n."""
+    if n == 0:
+        return (float("nan"), float("nan"))
+    from scipy.stats import norm
+
+    z = float(norm.ppf(1 - (1 - confidence) / 2))
+    p = successes / n
+    centre = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * np.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return (float(max(0.0, centre - half)), float(min(1.0, centre + half)))
+
+
+def coverage_corrected(observed_unseen: float, miss_rate: float) -> float:
+    """Private share after removing the observers' miss rate.
+
+    If observers miss a public transaction with probability m, independently of what it is,
+    then observed = true + (1 - true) * m, so true = (observed - m) / (1 - m), clipped to [0, 1].
+    """
+    if miss_rate >= 1:
+        return float("nan")
+    return float(min(1.0, max(0.0, (observed_unseen - miss_rate) / (1 - miss_rate))))

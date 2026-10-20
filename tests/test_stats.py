@@ -25,3 +25,19 @@ def test_ci_covers_true_mean_of_normal_sample():
 
 def test_empty_input():
     assert summarise([]).n == 0
+
+
+def test_wilson_interval_known_value():
+    from analysis.stats import proportion_ci
+
+    low, high = proportion_ci(81, 263)  # textbook example: about 0.255 to 0.366
+    assert abs(low - 0.2553) < 1e-3 and abs(high - 0.3662) < 1e-3
+    assert proportion_ci(0, 10)[0] == 0.0
+
+
+def test_coverage_correction():
+    from analysis.stats import coverage_corrected
+
+    assert coverage_corrected(0.06, 0.06) == 0.0  # only misses: nothing private
+    assert abs(coverage_corrected(0.53, 0.06) - 0.5) < 1e-12
+    assert coverage_corrected(1.0, 0.06) == 1.0

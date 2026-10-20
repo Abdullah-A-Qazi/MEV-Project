@@ -72,7 +72,9 @@ class CreditLedger:
     def __init__(self, path: Path | str, clock: Callable[[], datetime] | None = None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path, timeout=60)  # other processes may be writing
+        # timeout: other processes may be writing; check_same_thread=False: the Anvil proxy
+        # calls from its request threads, one at a time under its own lock.
+        self._conn = sqlite3.connect(self.path, timeout=60, check_same_thread=False)
         self._conn.executescript(_SCHEMA)
         self._clock = clock or (lambda: datetime.now(UTC))
 
