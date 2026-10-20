@@ -26,7 +26,7 @@ The tool only detects and measures. It never sends transactions, and it needs no
 | Victim loss (counterfactual without the front-run) | built, tested |
 | Realised profit per MEV bundle, ETH pricing, traced sample (`profit/`) | built, golden-tested on 18 real searcher-blocks |
 | RQ1 analytical estimate (pre-block replay) and at-execution formula (`profit/analytical.py`) | built, tested |
-| RQ1 Anvil simulation through a caching local proxy (`profit/simulate.py`, `collector/proxy.py`) | built; proxy tested; not yet run (needs Foundry) |
+| RQ1 Anvil simulation through a caching local proxy (`profit/simulate.py`, `collector/proxy.py`) | run on 100 bundles: 87 replayed, 95% match actual gross to the wei |
 | RQ2 Mempool Dumpster download, index, visibility table, coverage baseline (`mempool/`) | built, run on the full sample |
 | RQ3 slippage decoder: Router02, SushiSwap router, Universal Router (`mitigation/slippage.py`) | built; 3 of ~61,000 decoded swaps break their own limit |
 | RQ3 safe-slippage threshold (`mitigation/safe_threshold.py`) | built, tested against brute force |
@@ -56,7 +56,7 @@ make data       # cache -> data/processed/*.parquet (offline)
 make detect     # detectors -> data/results/*.parquet (looks up each new pool once)
 make profit     # realised profit per bundle, with a traced sample (keyless dRPC)
 make mempool    # download Mempool Dumpster days for the sample (about 6 GB) and index them
-make simulate   # replay sampled sandwiches on a local Anvil fork (needs Foundry, see below)
+make simulate   # replay sampled sandwiches on a local Anvil fork (needs Foundry: see below)
 make audit      # write the hand-labelling sheets into validation/labels/
 make results    # rebuild every result and figure from the cache, with no network access
 ```
@@ -156,6 +156,16 @@ data/results/realised_profit.parquet → analysis/
   aggregators and multi-hop trades are not.
 - Residual tokens in pools under 1 ETH deep, or with no Uniswap V2 / SushiSwap WETH pair,
   stay unpriced. Those bundles still have `realised_eth_only`.
+
+### Installing Foundry (for `make simulate`)
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+~/.foundry/bin/foundryup
+```
+
+The project finds Anvil in `~/.foundry/bin`; Anvil reads mainnet only through the caching
+proxy, so a rerun costs no credits.
 
 ## Tests and fixtures
 

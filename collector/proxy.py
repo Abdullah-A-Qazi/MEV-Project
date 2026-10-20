@@ -48,11 +48,14 @@ class RpcProxy:
                     else:
                         reply = handle_request(proxy.rpc, body, proxy.fork_block)
                 data = json.dumps(reply).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(data)))
-                self.end_headers()
-                self.wfile.write(data)
+                try:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # Anvil hung up (e.g. it was shut down); the answer is cached anyway
 
             def log_message(self, *args: Any) -> None:  # keep stdout quiet
                 pass

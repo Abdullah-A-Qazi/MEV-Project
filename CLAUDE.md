@@ -71,8 +71,8 @@ Key notes: `01 Project/Execution Standard.md`, `03 Methodology/RQ1–RQ3`, `04 B
       (golden vs balances), bundle completeness flag, detector refuses partial pool data.
 - [x] Collection complete: 7,800 blocks (Jan–Jun 2024, weekly, 300/day), Infura only.
 - [x] RQ1 analytical: pre-block estimate + at-execution formula; exact gap decomposition
-      (`analysis/rq1.py`). [ ] Anvil simulation: code + caching proxy done, run after Foundry
-      install (`make simulate`).
+      (`analysis/rq1.py`). [x] Anvil simulation: 100 bundles, 87 replayed (13 need txs the
+      replay leaves out), 95% equal actual gross to the wei. Foundry 1.8.5 in ~/.foundry/bin.
 - [x] RQ2: Mempool Dumpster (52 days, 6 GB) indexed; visibility table; coverage baseline
       (6.0% miss); `analysis/rq2.py`.
 - [x] RQ3: slippage decoder (Router02, Sushi, Universal Router), user-swap dataset, safe

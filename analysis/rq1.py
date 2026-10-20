@@ -13,7 +13,9 @@ and fully priced, with an analytical estimate. All values in ETH. For each bundl
     priority_fee, coinbase = paid to the block builder
 
 This is an identity (realised = revenue - gas - coinbase), so the parts add up exactly; the
-test suite checks it. Writes data/results/rq1_summary.json and figures/rq1_waterfall.png.
+test suite checks it. If the Anvil replay has been run (profit/simulate.py), its sample is
+compared with the other estimates too. Writes data/results/rq1_summary.json and
+figures/rq1_waterfall.png.
 """
 
 import json
@@ -129,6 +131,50 @@ def waterfall(rows: pd.DataFrame, path) -> None:
     plt.close(fig)
 
 
+def simulation_summary(sim: pd.DataFrame, frame: pd.DataFrame, seed: int) -> dict:
+    """Compare the Anvil replay (profit/simulate.py) with the other estimates, per bundle.
+
+    sim_revenue = the bot's ETH + WETH change on the fork, plus the gas it paid there: the
+    same quantity as the actual gross for a WETH sandwich, measured independently of the swap
+    maths. So sim vs gross checks the replay, sim vs analytical shows what the formula
+    misses, and sim vs realised repeats RQ1's gap with a second estimator.
+    """
+    ok = sim[sim["ok"] & sim["sim_revenue"].notna()].merge(frame, on="bundle_id")
+    e = lambda col: ok[col].astype(float) / WEI  # noqa: E731
+    simulated = e("sim_revenue")
+    exact = (ok["sim_revenue"].astype(int) - ok["detector_gross"].astype(int)).abs()
+    realised = e("realised_untraced")  # NaN where a leftover token could not be priced
+    gap = simulated - realised
+    kept = realised / simulated.where(simulated > 0)
+
+    def s(values):
+        x = summarise(values.dropna(), seed=seed, n_resamples=4000)
+        return {"n": x.n, "median": x.median, "median_ci": x.median_ci,
+                "mean": x.mean, "mean_ci": x.mean_ci}  # fmt: skip
+
+    statuses = sim["statuses"].map(lambda v: json.loads(v) if isinstance(v, str) else None)
+    reverted = {"front": 0, "victim": 0, "back": 0, "no_receipts": 0}
+    for st in statuses[~sim["ok"]]:
+        if not isinstance(st, list):
+            reverted["no_receipts"] += 1
+            continue
+        reverted["front"] += st[0] == 0
+        reverted["victim"] += 0 in st[1:-1]
+        reverted["back"] += st[-1] == 0
+    return {
+        "sampled": len(sim),
+        "failed_legs": reverted,
+        "replayed_ok": len(ok),
+        "failed": int((~sim["ok"]).sum()),
+        "sim_equals_actual_gross_exactly": float((exact == 0).mean()),
+        "sim_within_1e-9_eth_of_gross": float((exact <= 10**9).mean()),
+        "abs_error_analytical_vs_sim_eth": s((e("analytical_estimate") - simulated).abs()),
+        "abs_error_formula_vs_sim_eth": s((e("formula_at_execution") - simulated).abs()),
+        "sim_minus_realised_eth": s(gap),
+        "share_of_sim_kept": s(kept),
+    }
+
+
 def main() -> None:
     config = load_config()
     results = config.data_dir / "results"
@@ -136,6 +182,9 @@ def main() -> None:
     frame = pd.read_parquet(results / "realised_profit.parquet")
     rows, traced = decompose(frame), decompose(frame, traced=True)
     out = {"all_usable": summary(rows, seed), "traced_sample": summary(traced, seed)}
+    sim_path = results / "rq1_simulation.parquet"
+    if sim_path.exists():
+        out["simulation"] = simulation_summary(pd.read_parquet(sim_path), frame, seed)
     for kind in ("sandwich", "arbitrage"):
         part = rows[rows["kind"] == kind]
         if len(part):
