@@ -28,13 +28,13 @@ from collector.rpc import RpcClient, RpcError
 from common.config import Config, load_config
 from common.constants import (
     ERC20_TRANSFER_TOPIC,
-    PUBLIC_ROUTERS,
     UNISWAP_V2_SWAP_TOPIC,
     UNISWAP_V3_SWAP_TOPIC,
     WETH,
 )
 from common.nulls import is_missing
 from common.provenance import write_provenance
+from common.routers import known_routers
 from detectors.load import build_market, load_swaps
 from detectors.swaps import Swap
 from profit.analytical import (
@@ -219,6 +219,7 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
     results = config.data_dir / "results"
     arbitrages = pd.read_parquet(results / "arbitrages.parquet")
     sandwiches = pd.read_parquet(results / "sandwiches.parquet")
+    routers = known_routers(config)
     bundles = group_into_bundles(build_events(arbitrages, sandwiches))
     detected = event_amounts(arbitrages, sandwiches)
     bundle_txs = {h for b in bundles for h in b.tx_hashes}
@@ -254,7 +255,7 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
             tx, receipt = txs.loc[h], receipts.loc[h]
             to = None if is_missing(tx["to"]) else tx["to"]
             actors.add(tx["from"])
-            if to and to not in PUBLIC_ROUTERS:
+            if to and to not in routers:
                 actors.add(to)
             tx_data.append(TxData(h, tx["from"], to, int(tx["value"]), int(receipt["gas_used"]),
                                   int(receipt["effective_gas_price"]), logs_by_tx.get(h, ()),

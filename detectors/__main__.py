@@ -24,6 +24,7 @@ from collector.cache import RpcCache
 from collector.credits import CreditLedger
 from collector.rpc import RpcClient
 from common.config import Config, load_config
+from common.routers import known_routers
 from detectors.arbitrage import Arbitrage, detect_arbitrages
 from detectors.load import build_market, load_swaps
 from detectors.sandwich import Sandwich, detect_sandwiches
@@ -58,7 +59,7 @@ def run(config: Config, rpc: RpcClient, allow_missing_pools: bool = False) -> di
     market = build_market(swaps, logs, pools, rpc)
     arbitrages = detect_arbitrages(swaps)
     tolerance = config.detectors.get("sandwich", {}).get("amount_tolerance", 0.2)
-    sandwiches = detect_sandwiches(swaps, tolerance)
+    sandwiches = detect_sandwiches(swaps, tolerance, known_routers(config))
 
     # A swap can be both a sandwich leg and part of an arbitrage cycle in the same tx (bots
     # batch them). The swap keeps its sandwich role; the arbitrage is flagged so analyses can

@@ -77,12 +77,16 @@ def make_sheets(results: Path, seed: int) -> dict[str, pd.DataFrame]:
             "arbitrage_detections": ar_sheet}  # fmt: skip
 
 
-def score(labels_dir: Path, results: Path) -> dict:
+def score(labels_dir: Path, results: Path, column: str = "label") -> dict:
+    """Precision, miss rate and recall from one label column: "label" (the person's
+    audit) or "ai_label" (validation/ai_audit.py). Only y/n rows count."""
+
     def labelled(name: str) -> pd.DataFrame:
         path = labels_dir / f"{name}.csv"
         sheet = pd.read_csv(path, dtype=str, keep_default_na=False) if path.exists() else None
-        if sheet is None:
+        if sheet is None or column not in sheet:
             return pd.DataFrame(columns=["label"])
+        sheet = sheet.assign(label=sheet[column])
         return sheet[sheet["label"].str.lower().isin(["y", "n"])]
 
     out: dict = {}
@@ -103,12 +107,36 @@ def score(labels_dir: Path, results: Path) -> dict:
         not_detected = int((~users["sandwiched"]).sum())
         missed_est = missed / n * not_detected
         out["victim_recall_estimate"] = detected / (detected + missed_est) if detected else None
+        # The miss rate's interval drives recall's: few checked non-detections leave it wide.
+        low_miss, high_miss = proportion_ci(missed, n)
+        out["victim_recall_ci"] = (
+            (
+                detected / (detected + high_miss * not_detected),
+                detected / (detected + low_miss * not_detected),
+            )
+            if detected
+            else None
+        )
+    scan = results / "ai_miss_scan.parquet"
+    if column == "ai_label" and scan.exists():
+        # The AI auditor's non-detection rule run on every unflagged user swap
+        # (validation/ai_audit.py --scan-all). Treating every flagged swap as a real miss
+        # gives a recall floor for the bracketing pattern the rule looks for.
+        users = pd.read_parquet(results / "user_swaps.parquet", columns=["sandwiched"])
+        detected = int(users["sandwiched"].sum())
+        possible = len(pd.read_parquet(scan))
+        out["ai_full_scan"] = {
+            "unflagged_user_swaps": int((~users["sandwiched"]).sum()),
+            "possible_misses": possible,
+            "recall_if_all_were_misses": detected / (detected + possible) if detected else None,
+        }
     return out
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m validation.audit")
     parser.add_argument("command", choices=["sample", "score"])
+    parser.add_argument("--column", default="label", help='"label" (yours) or "ai_label"')
     args = parser.parse_args()
     config = load_config()
     results = config.data_dir / "results"
@@ -122,7 +150,8 @@ def main() -> None:
             sheet.to_csv(path, index=False)
             print(f"wrote {len(sheet)} rows to {path.relative_to(REPO_ROOT)}")
     else:
-        print(json.dumps(score(LABELS_DIR, results), indent=1, default=float))
+        out = {"scored_column": args.column, **score(LABELS_DIR, results, args.column)}
+        print(json.dumps(out, indent=1, default=float))
 
 
 if __name__ == "__main__":

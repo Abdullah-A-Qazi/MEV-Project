@@ -76,6 +76,9 @@ results:
 	uv run python -m analysis.rq3
 	uv run python -m analysis.sensitivity
 	uv run python -m validation.audit score
+	uv run python -m validation.ai_audit
+	uv run python -m validation.ai_audit --scan-all
+	uv run python -m validation.audit score --column ai_label
 
 credits:
 	uv run python -m collector credits

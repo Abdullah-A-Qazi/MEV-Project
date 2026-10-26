@@ -69,15 +69,17 @@ Key notes: `01 Project/Execution Standard.md`, `03 Methodology/RQ1–RQ3`, `04 B
 ## Current status (26 Oct 2026)
 - [x] Steps 1–9 done on the full sample (7,800 blocks, Jan–Jun 2024, Infura only):
       collector, V2 + V3 maths (golden: 48 V2, 60 V3 real swaps), detectors on V2 + V3
-      (6,975 sandwiches, 1,591 arbitrages), realised profit (golden vs balances), RQ1
+      (6,922 sandwiches, 1,591 arbitrages), realised profit (golden vs balances), RQ1
       estimates + Anvil sample, RQ2 mempool visibility, RQ3 decoder (V2 + V3 routers),
       safe threshold, regression, avoidable loss, robustness checks, risk checker CLI.
 - Bundle completeness: no undetected swaps AND no transfers to non-detected counterparties
-  (`unexplained_transfers`); 3,989 of 5,406 bundles qualify.
+  (`unexplained_transfers`); 3,955 of 5,353 bundles qualify.
 - V3 replays are single-range; refused when active liquidity changed. Without RPC, V3
   pre-block state is inferred from the pool's first swap (`profit/v3_state.py`).
-- [ ] Validation: label `validation/labels/*.csv` (user), then `python -m validation.audit score`.
-      ZeroMEV API unreachable (26 Oct 2026), so no labelled-data comparison.
+- [x] AI-run audit (`validation/ai_audit.py`, `ai_label` only, never `label`): independent
+      rules on raw transfers; found the shared-router flaw (now `common/routers.py`).
+- [ ] Human validation: label `validation/labels/*.csv` (`label` column), then
+      `python -m validation.audit score`. ZeroMEV and EigenPhi unavailable (26 Oct 2026).
 - `make results` rebuilds everything offline (about 7 minutes).
 - pandas 3 returns NaN, not None, for missing strings: use `common.nulls.is_missing`.
 - Deadline target: core build and first results for all RQs by 20 Dec 2026.

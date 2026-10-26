@@ -137,3 +137,15 @@ def test_each_back_run_is_used_once():
     back = pool.swap(4, f2.amount_out, WETH, BOT_EOA, BOT_CONTRACT)
     found = detect_sandwiches([f1, f2, victim, back])
     assert len(found) == 1
+
+
+def test_shared_router_is_not_an_attacker_identity():
+    """Two strangers trading through the same trading-bot router are not one attacker."""
+    shared = addr(0xBA7A7A)
+    pool = fresh_pool()
+    buyer = pool.swap(1, 100_000 * E18, USDC, addr(0x10), shared)
+    victim = pool.swap(2, 50_000 * E18, USDC, VICTIM)
+    seller = pool.swap(3, buyer.amount_out, WETH, addr(0x20), shared)
+    swaps = [buyer, victim, seller]
+    assert len(detect_sandwiches(swaps)) == 1  # unknown contract: looks like one bot
+    assert detect_sandwiches(swaps, routers=frozenset({shared})) == []

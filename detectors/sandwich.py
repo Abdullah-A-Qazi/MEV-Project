@@ -13,14 +13,15 @@ such that
   * each V is in a transaction that is not the attacker's.
 
 Attacker identity. A swap's "actors" are the EOA that signed the transaction plus the
-contract it called, unless that contract is a public router (many unrelated users call the
-same router, so it says nothing about who they are). Two swaps belong to the same attacker
-if they share an actor; this catches bots that rotate EOAs but reuse one contract.
+contract it called, unless that contract is shared by many unrelated users (a public or
+trading-bot router: common/routers.py), which says nothing about who is trading. Two swaps
+belong to the same attacker if they share an actor; this catches bots that rotate EOAs but
+reuse one contract.
 """
 
 from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from common.constants import PUBLIC_ROUTERS
 from detectors.swaps import Swap
@@ -33,12 +34,13 @@ class Sandwich:
     front: Swap
     back: Swap
     victims: tuple[Swap, ...]
+    routers: frozenset[str] = field(default=frozenset(PUBLIC_ROUTERS), repr=False, compare=False)
 
     @property
     def attacker(self) -> str:
         """Bot contract if there is one, else the signing EOA."""
         to = self.front.tx_to
-        return to if to and to not in PUBLIC_ROUTERS else self.front.tx_from
+        return to if to and to not in self.routers else self.front.tx_from
 
     @property
     def token_x(self) -> str:
@@ -64,9 +66,9 @@ class Sandwich:
         return self.front.amount_out - self.back.amount_in
 
 
-def actors(swap: Swap) -> frozenset[str]:
+def actors(swap: Swap, routers: frozenset[str] = frozenset(PUBLIC_ROUTERS)) -> frozenset[str]:
     ids = {swap.tx_from} if swap.tx_from else set()
-    if swap.tx_to and swap.tx_to not in PUBLIC_ROUTERS:
+    if swap.tx_to and swap.tx_to not in routers:
         ids.add(swap.tx_to)
     return frozenset(ids)
 
@@ -75,7 +77,11 @@ def _amounts_match(front: Swap, back: Swap, tolerance: float) -> bool:
     return abs(back.amount_in - front.amount_out) <= tolerance * front.amount_out
 
 
-def find_sandwiches_in_pool(pool_swaps: list[Swap], tolerance: float = 0.2) -> list[Sandwich]:
+def find_sandwiches_in_pool(
+    pool_swaps: list[Swap],
+    tolerance: float = 0.2,
+    routers: frozenset[str] = frozenset(PUBLIC_ROUTERS),
+) -> list[Sandwich]:
     """Sandwiches among the swaps of one pool within one block."""
     ordered = sorted((s for s in pool_swaps if s.is_simple), key=lambda s: s.position)
     used: set[tuple[str, int]] = set()  # (tx_hash, log_index) of swaps already in a sandwich
@@ -84,14 +90,14 @@ def find_sandwiches_in_pool(pool_swaps: list[Swap], tolerance: float = 0.2) -> l
     for i, front in enumerate(ordered):
         if (front.tx_hash, front.log_index) in used:
             continue
-        attacker = actors(front)
+        attacker = actors(front, routers)
         if not attacker:
             continue
         for j in range(i + 1, len(ordered)):
             back = ordered[j]
             if back.tx_index <= front.tx_index or (back.tx_hash, back.log_index) in used:
                 continue
-            if back.zero_for_one == front.zero_for_one or not (actors(back) & attacker):
+            if back.zero_for_one == front.zero_for_one or not (actors(back, routers) & attacker):
                 continue
             if not _amounts_match(front, back, tolerance):
                 continue
@@ -100,22 +106,27 @@ def find_sandwiches_in_pool(pool_swaps: list[Swap], tolerance: float = 0.2) -> l
                 for v in ordered[i + 1 : j]
                 if front.tx_index < v.tx_index < back.tx_index
                 and v.zero_for_one == front.zero_for_one
-                and not (actors(v) & attacker)
+                and not (actors(v, routers) & attacker)
             )
             if not victims:
                 continue
-            found.append(Sandwich(front.block_number, front.pool, front, back, victims))
+            found.append(Sandwich(front.block_number, front.pool, front, back, victims, routers))
             used.add((front.tx_hash, front.log_index))
             used.add((back.tx_hash, back.log_index))
             break  # this front-run is matched with its nearest valid back-run
     return found
 
 
-def detect_sandwiches(swaps: Iterable[Swap], tolerance: float = 0.2) -> list[Sandwich]:
+def detect_sandwiches(
+    swaps: Iterable[Swap],
+    tolerance: float = 0.2,
+    routers: frozenset[str] = frozenset(PUBLIC_ROUTERS),
+) -> list[Sandwich]:
+    """`routers`: contracts that are never an attacker identity (common/routers.py)."""
     by_block_pool: dict[tuple[int, str], list[Swap]] = defaultdict(list)
     for swap in swaps:
         by_block_pool[(swap.block_number, swap.pool)].append(swap)
     result = []
     for pool_swaps in by_block_pool.values():
-        result.extend(find_sandwiches_in_pool(pool_swaps, tolerance))
+        result.extend(find_sandwiches_in_pool(pool_swaps, tolerance, routers))
     return sorted(result, key=lambda s: (s.block_number, s.front.tx_index, s.pool))

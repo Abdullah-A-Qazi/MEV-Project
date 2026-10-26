@@ -20,6 +20,7 @@ from collector.credits import CreditLedger
 from collector.pipeline import read_table
 from collector.rpc import RpcClient
 from common.config import load_config
+from common.routers import known_routers
 from detectors.load import load_swaps
 from detectors.sandwich import detect_sandwiches
 
@@ -64,13 +65,14 @@ def main() -> None:
     # population used for RQ3 (role other or victim at the 20% setting).
     user_keys = set(user_public)
 
+    routers = known_routers(config)
     out: dict = {"tolerance": {}, "halves": {}}
     for tol in TOLERANCES:
         out["tolerance"][str(tol)] = answers(
-            detect_sandwiches(swaps, tol), user_keys, seen_before, user_public
+            detect_sandwiches(swaps, tol, routers), user_keys, seen_before, user_public
         )
-    base = detect_sandwiches(swaps, float(config.detectors.get("sandwich", {})
-                                          .get("amount_tolerance", 0.2)))  # fmt: skip
+    tolerance = float(config.detectors.get("sandwich", {}).get("amount_tolerance", 0.2))
+    base = detect_sandwiches(swaps, tolerance, routers)
     for label, (first, last) in HALVES.items():
         part = [s for s in base if first <= month[s.block_number] <= last]
         keys = {k for k in user_keys if first <= month[user_block[k]] <= last}

@@ -34,7 +34,8 @@ The tool only detects and measures. It never sends transactions, and it needs no
 | Analyses and figures for RQ1–RQ3 (`analysis/rq1.py`, `rq2.py`, `rq3.py`) | built, run on the full sample |
 | Robustness: sandwich tolerance 10/20/50%, Jan–Mar vs Apr–Jun (`analysis/sensitivity.py`) | built, run |
 | Sandwich risk checker CLI (`mitigation/checker.py`) | built, tested; V2 pools |
-| Manual audit sheets and scoring (`validation/audit.py`, `validation/labels/`) | built; labelling not done |
+| Manual audit sheets and scoring (`validation/audit.py`, `validation/labels/`) | built; human labelling not done |
+| AI-run audit from raw transfers (`validation/ai_audit.py`, `ai_label` column) | run: sandwich precision 99/99, arbitrage 44/46, 0 misses in 96 non-detections; full scan of 237,711 unflagged swaps finds 500 possible misses (recall at least ~94% for that pattern) |
 | Labelled-data comparison (ZeroMEV) | not possible: ZeroMEV's API was down (26 Oct 2026) |
 
 Headline results, figures and their inputs are rebuilt by `make results` into
@@ -102,9 +103,11 @@ data/results/realised_profit.parquet → analysis/
   previous `Sync` event.
 - **Pools are verified by CREATE2.** Any contract can emit a Swap-shaped event. A pool counts
   only if its address equals the one its claimed factory would deploy for that token pair.
-- **Attacker identity comes from the transaction's EOA and its target contract, never a public
-  router.** This catches bots that rotate EOAs. It avoids pairing two unrelated users who both
-  went through Router02.
+- **Attacker identity comes from the transaction's EOA and its target contract, never a shared
+  router.** This catches bots that rotate EOAs. A contract called by 100 or more distinct
+  EOAs in the sample counts as shared (`common/routers.py`): bots have at most 15 callers,
+  routers such as Banana Gun or Maestro thousands. The AI audit found 53 false sandwiches
+  that two strangers using one trading-bot router had produced before this rule.
 - **The sandwich back-run must sell within ±20% of what the front-run bought.** This tolerance
   is set in `config.yaml` so results can be checked for sensitivity to it.
 - **Realised profit is measured per bundle, not per event.** Bots batch several sandwiches
@@ -146,9 +149,9 @@ data/results/realised_profit.parquet → analysis/
 - Uniswap V2, SushiSwap and Uniswap V3 only; other DEXs (Curve, Balancer, aggregators'
   own pools) are not decoded. Bundles whose transactions contain swaps the detectors do not
   explain, or token transfers to anything but a detected pool, are left out of realised
-  profit (1,417 of 5,406 bundles).
+  profit (1,398 of 5,353 bundles).
 - V3 maths is single-range: a V3 replay is only made when the real swaps it rests on kept
-  the active liquidity unchanged. 55% of V3 victims have a computed loss (82% for V2).
+  the active liquidity unchanged. 54% of V3 victims have a computed loss (83% for V2).
 - The safe-slippage threshold uses V2 victims only (constant-product maths).
 - The Anvil simulation sample (100 bundles) was drawn before V3 support; it covers V2
   sandwich bundles.
@@ -165,8 +168,11 @@ data/results/realised_profit.parquet → analysis/
   aggregators and multi-hop trades are not.
 - Residual tokens in pools under 1 ETH deep, or with no Uniswap WETH pool, stay unpriced.
   Those bundles still have `realised_eth_only`.
-- No labelled-data comparison yet: ZeroMEV's API was unreachable, so detector validation
-  rests on the manual audit sheets in `validation/labels/`.
+- No labelled-data comparison: ZeroMEV's API was unreachable and EigenPhi's transaction pages
+  are gone (26 Oct 2026). Validation rests on the audit sheets in `validation/labels/`.
+- The AI-run audit (`ai_label`) is not a substitute for the human one: it was written by the
+  same AI that wrote the detectors, though from different data (raw transfers, not Swap
+  events). Report it as AI-run and spot-check it by hand.
 
 ### Installing Foundry (for `make simulate`)
 

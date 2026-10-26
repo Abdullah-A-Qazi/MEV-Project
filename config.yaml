@@ -93,6 +93,10 @@ sample:
 detectors:
   # Only swaps on pools verified (by CREATE2 address) as belonging to these factories.
   allowed_dexes: [uniswap_v2, sushiswap, uniswap_v3]
+  # A contract called by at least this many distinct EOAs in the sample is a shared router
+  # (Uniswap, aggregators, Telegram trading bots) and never an attacker's identity. In the
+  # 2024 sample bots have at most 15 callers and shared routers 873 or more.
+  shared_contract_min_senders: 100
   sandwich:
     # The back-run must sell between (1 - tol) and (1 + tol) of what the front-run bought.
     # Kept as a parameter so the sensitivity of results to it can be reported.
