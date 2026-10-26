@@ -92,7 +92,7 @@ sample:
 # --- Detectors ------------------------------------------------------------------------------
 detectors:
   # Only swaps on pools verified (by CREATE2 address) as belonging to these factories.
-  allowed_dexes: [uniswap_v2, sushiswap]
+  allowed_dexes: [uniswap_v2, sushiswap, uniswap_v3]
   sandwich:
     # The back-run must sell between (1 - tol) and (1 + tol) of what the front-run bought.
     # Kept as a parameter so the sensitivity of results to it can be reported.

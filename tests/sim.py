@@ -67,3 +67,41 @@ class Pool:
 
 def addr(n: int) -> str:
     return f"0x{n:040x}"
+
+
+class V3Pool:
+    """A single-range Uniswap V3 pool: emits Swap records with V3 state, like real events."""
+
+    def __init__(self, address: str, token0: str, token1: str, sqrt_price_x96: int,
+                 liquidity: int, fee: int = 3000):  # fmt: skip
+        from profit.uniswap_v3 import V3State
+
+        self.address, self.token0, self.token1, self.fee = address, token0, token1, fee
+        self.state = V3State(sqrt_price_x96, liquidity)
+        self._log_index = count()
+
+    def swap(
+        self,
+        tx_index: int,
+        amount_in: int,
+        token_in: str,
+        tx_from: str,
+        tx_to: str | None = ROUTER,
+        tx_hash: str | None = None,
+        block: int = 100,
+    ) -> Swap:
+        from profit.uniswap_v3 import swap_exact_input
+
+        zero_for_one = token_in == self.token0
+        self.state, out = swap_exact_input(self.state, amount_in, zero_for_one, self.fee)
+        return Swap(
+            block_number=block, tx_index=tx_index, tx_hash=tx_hash or f"0x{tx_index:064x}",
+            log_index=next(self._log_index), pool=self.address, dex="uniswap_v3",
+            token0=self.token0, token1=self.token1,
+            amount0_in=amount_in if zero_for_one else 0,
+            amount1_in=0 if zero_for_one else amount_in,
+            amount0_out=0 if zero_for_one else out, amount1_out=out if zero_for_one else 0,
+            sender=tx_to or tx_from, recipient=tx_from, tx_from=tx_from, tx_to=tx_to,
+            reserves_after=None, sqrt_price_after=self.state.sqrt_price_x96,
+            liquidity_after=self.state.liquidity, tick_after=0,
+        )  # fmt: skip

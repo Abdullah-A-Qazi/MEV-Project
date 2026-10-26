@@ -31,8 +31,11 @@ class EthPricer:
         swaps: Iterable[Swap] = (),
         rpc: RpcClient | None = None,
         min_weth_reserve: int = DEFAULT_MIN_WETH_RESERVE,
+        market=None,
     ):
+        """`market` (profit.market.Market) adds Uniswap V3 WETH pools as a last price source."""
         self.rpc = rpc
+        self.market = market
         self.min_weth_reserve = min_weth_reserve
         self.lookup_failures = 0  # chain lookups that failed for network reasons
 
@@ -42,6 +45,13 @@ class EthPricer:
             key = (swap.block_number, swap.pool)
             if key not in earliest or swap.position < earliest[key].position:
                 earliest[key] = swap
+
+        # Per (block, token): V3 WETH pools that traded in that block.
+        self._v3_pools: dict[tuple[int, str], list[str]] = {}
+        for swap in earliest.values():
+            if swap.is_v3 and WETH in (swap.token0, swap.token1):
+                token = swap.token1 if swap.token0 == WETH else swap.token0
+                self._v3_pools.setdefault((swap.block_number, token), []).append(swap.pool)
 
         # Per (block, token): (token_reserve, weth_reserve) of the deepest WETH pool.
         self._from_swaps: dict[tuple[int, str], tuple[int, int]] = {}
@@ -88,6 +98,21 @@ class EthPricer:
                 return pair_reserves
         return None
 
+    def _from_v3(self, token: str, block: int) -> tuple[int, int] | None:
+        """(token, WETH) virtual reserves of the deepest V3 WETH pool, before the block."""
+        if self.market is None:
+            return None
+        best = None
+        for pool in self._v3_pools.get((block, token), []):
+            state = self.market.pre_block(block, pool)
+            if state is None:
+                continue
+            x, y = self.market.depth(state, zero_for_one=True)  # (token0, token1) virtual
+            reserves = (x, y) if token < WETH else (y, x)  # token0 is the smaller address
+            if reserves[1] >= self.min_weth_reserve and (best is None or reserves[1] > best[1]):
+                best = reserves
+        return best
+
     def wei_value(self, token: str, amount: int, block: int) -> int | None:
         """Value of `amount` raw units of `token` in wei, at pre-block mid price."""
         token = token.lower()
@@ -96,6 +121,8 @@ class EthPricer:
         reserves = self._from_swaps.get((block, token))
         if reserves is None or reserves[1] < self.min_weth_reserve:
             reserves = self._from_chain(token, block)
+        if reserves is None:
+            reserves = self._from_v3(token, block)
         if reserves is None or reserves[0] == 0:
             return None
         token_reserve, weth_reserve = reserves

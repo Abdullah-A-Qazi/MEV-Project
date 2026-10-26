@@ -100,3 +100,73 @@ def formula_sandwich(front: Swap, back: Swap) -> int | None:
     except (InsufficientLiquidity, ValueError):
         return None
     return back_out - front.amount_in
+
+
+# --- Both protocols ----------------------------------------------------------------------------
+# The functions above take V2 reserves directly (and are pinned by the tests). The ones below
+# do the same through profit.market.Market, so V3 pools are priced with V3 maths. A V3 replay
+# is only trusted when the real swaps it rests on stayed inside one liquidity range.
+
+
+def _v3_path(market, swap: Swap) -> list[Swap]:
+    """V3 swaps in `swap`'s pool and block, up to and including `swap`."""
+    group = market.v3._by_pool.get((swap.block_number, swap.pool), [])
+    return [s for s in group if s.position <= swap.position]
+
+
+def market_estimate_arbitrage(market, cycle: list[Swap]) -> int | None:
+    state: dict[str, object] = {}
+    amount = cycle[0].amount_in
+    try:
+        for swap in cycle:
+            current = state.get(swap.pool)
+            if current is None:
+                current = market.pre_block(swap.block_number, swap.pool)
+                if current is None or not market.trusted_v3_path(current, _v3_path(market, swap)):
+                    return None
+            state[swap.pool], amount = market.trade(swap.pool, current, amount, swap.zero_for_one)
+    except ValueError:
+        return None
+    return amount - cycle[0].amount_in
+
+
+def market_formula_arbitrage(market, cycle: list[Swap]) -> int | None:
+    amount = cycle[0].amount_in
+    try:
+        for swap in cycle:
+            before = market.before(swap)
+            if before is None or not market.trusted_v3_path(before, [swap]):
+                return None
+            _, amount = market.trade(swap.pool, before, amount, swap.zero_for_one)
+    except ValueError:
+        return None
+    return amount - cycle[0].amount_in
+
+
+def market_estimate_sandwich(market, front: Swap, victims: list[Swap], back: Swap) -> int | None:
+    start = market.pre_block(front.block_number, front.pool)
+    if start is None:
+        return None
+    if isinstance(start, Reserves):  # V2: as estimate_sandwich, front and victims as executed
+        return estimate_sandwich(front, victims, back, {(front.block_number, front.pool): start})
+    if not market.trusted_v3_path(start, _v3_path(market, back)):
+        return None
+    try:
+        state, _ = market.trade(front.pool, start, front.amount_in, front.zero_for_one)
+        for victim in sorted(victims, key=lambda v: v.position):
+            state, _ = market.trade(front.pool, state, victim.amount_in, victim.zero_for_one)
+        _, back_out = market.trade(front.pool, state, back.amount_in, back.zero_for_one)
+    except ValueError:
+        return None
+    return back_out - front.amount_in
+
+
+def market_formula_sandwich(market, front: Swap, back: Swap) -> int | None:
+    before = market.before(back)
+    if before is None or not market.trusted_v3_path(before, [back]):
+        return None
+    try:
+        _, back_out = market.trade(back.pool, before, back.amount_in, back.zero_for_one)
+    except ValueError:
+        return None
+    return back_out - front.amount_in

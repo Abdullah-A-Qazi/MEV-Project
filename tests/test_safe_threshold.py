@@ -47,3 +47,14 @@ def test_bigger_trades_have_lower_safe_thresholds():
     small = safe_tolerance(VICTIM // 4, R_IN, R_OUT, cost)
     large = safe_tolerance(VICTIM * 4, R_IN, R_OUT, cost)
     assert large < small
+
+
+def test_checker_assessment_is_consistent():
+    from mitigation.checker import assess
+
+    cost = E18 // 100
+    loose = assess(VICTIM, R_IN, R_OUT, 0.05, cost)
+    safe = assess(VICTIM, R_IN, R_OUT, loose["safe_slippage"], cost)
+    assert loose["worth_attacking"] and not safe["worth_attacking"]
+    assert loose["max_attacker_profit"] > safe["max_attacker_profit"]
+    assert abs(loose["size_vs_pool"] - VICTIM / R_IN) < 1e-12

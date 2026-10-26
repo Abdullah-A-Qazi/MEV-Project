@@ -3,6 +3,9 @@
 Input: data/results/user_swaps.parquet (python -m mitigation.dataset). Five analyses, as
 planned in the methodology note:
 
+Uniswap V2 and V3 swaps are both included (rates are also given per protocol); the
+safe-threshold analysis uses V2 victims only, as its maths is constant-product.
+
 1. Private submission: sandwich rate for public vs private swaps, plus the private rate
    after removing public swaps that Mempool Dumpster simply missed (coverage baseline).
 2. Slippage tolerance: sandwich rate and loss by tolerance bucket (public, decoded swaps).
@@ -82,6 +85,13 @@ def main() -> None:
                     "private_rate_corrected": private_rate_corrected(df[df["decoded"]], miss)},
     }  # fmt: skip
 
+    out["by_protocol"] = {
+        proto: {"public": rate(g[g["public"]]["sandwiched"]),
+                "private": rate(g[~g["public"]]["sandwiched"]),
+                "decoded_share": float(g["decoded"].mean())}
+        for proto, g in df.groupby("protocol")
+    }  # fmt: skip
+
     # 2-3. Tolerance and size buckets, public decoded swaps
     pub = df[df["public"] & df["decoded"]].dropna(subset=["tolerance", "size_ratio"]).copy()
     pub["slip"] = pd.cut(pub["tolerance"], SLIP_EDGES, labels=SLIP_LABELS, right=False)
@@ -116,7 +126,11 @@ def main() -> None:
     ]
     victims = df[df["sandwiched"] & df["loss_eth"].notna() & (df["loss_eth"] > 0)].copy()
     weth_victims = victims[
-        victims["decoded"] & (victims["kind"] == "exact_input") & victims["input_is_weth"]
+        victims["decoded"]
+        & (victims["kind"] == "exact_input")
+        & victims["input_is_weth"]
+        # Constant-product maths: V2 pools only (a hypothetical V3 attack may cross ranges).
+        & (victims["protocol"] == "v2")
     ].copy()
     weth_victims["safe"] = [
         safe_tolerance(int(r.amount_in), int(r.reserve_in), int(r.reserve_out),
@@ -186,7 +200,8 @@ def main() -> None:
     plt.close(fig)
 
     (results / "rq3_summary.json").write_text(json.dumps(out, indent=1, default=float) + "\n")
-    print(json.dumps({k: out[k] for k in ("population", "private_submission", "safe_threshold",
+    print(json.dumps({k: out[k] for k in ("population", "private_submission", "by_protocol",
+                                          "safe_threshold",
                                           "avoidable_loss")}, indent=1, default=float))  # fmt: skip
 
 

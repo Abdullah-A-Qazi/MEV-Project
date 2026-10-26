@@ -18,7 +18,8 @@ help:
 	@echo "audit     write the hand-labelling sheets into validation/labels/"
 	@echo "results   rebuild every result and figure from cached data, no network"
 	@echo "credits   show credit usage per provider and method"
-	@echo "fixtures  rebuild the golden test fixtures from mainnet (keyless public RPC)"
+	@echo "fixtures  rebuild the golden test fixtures (V2 from mainnet via keyless RPC; V3 from cache)"
+	@echo "risk check: uv run python -m mitigation.checker --pool ... --sell ... --amount ... --slippage ..."
 
 setup:
 	uv sync --locked
@@ -73,6 +74,7 @@ results:
 	uv run python -m analysis.rq1
 	uv run python -m analysis.rq2
 	uv run python -m analysis.rq3
+	uv run python -m analysis.sensitivity
 	uv run python -m validation.audit score
 
 credits:
@@ -80,3 +82,4 @@ credits:
 
 fixtures:
 	uv run python -m validation.build_v2_golden
+	uv run python -m validation.build_v3_golden

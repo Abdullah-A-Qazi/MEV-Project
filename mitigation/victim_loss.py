@@ -36,27 +36,45 @@ class VictimLoss:
         return self.loss / self.counterfactual_out if self.counterfactual_out else 0.0
 
 
-def victim_losses(sandwich: Sandwich, pool_swaps: list[Swap]) -> list[VictimLoss]:
-    """Loss of each victim in `sandwich`. `pool_swaps` = all swaps in that pool and block."""
-    start = sandwich.front.reserves_before
-    if start is None:
-        return []
+def victim_losses(sandwich: Sandwich, pool_swaps: list[Swap], market=None) -> list[VictimLoss]:
+    """Loss of each victim in `sandwich`. `pool_swaps` = all swaps in that pool and block.
+
+    V2 needs nothing else. V3 needs `market` (profit.market.Market) for the state before the
+    front-run and the pool's fee; it is computed only if the real swaps from the front-run to
+    the back-run stayed in one liquidity range (otherwise no loss is reported for it).
+    """
+    front = sandwich.front
+    if front.is_v3:
+        if market is None:
+            return []
+        start = market.before(front)
+        path = [s for s in pool_swaps if front.position <= s.position <= sandwich.back.position]
+        if start is None or not market.trusted_v3_path(start, path):
+            return []
+        trade = lambda state, swap: market.trade(  # noqa: E731
+            front.pool, state, swap.amount_in, swap.zero_for_one
+        )
+    else:
+        start = front.reserves_before
+        if start is None:
+            return []
+        trade = lambda state, swap: apply_swap(state, swap.amount_in, swap.zero_for_one)  # noqa: E731
     between = sorted(
         (
             s
             for s in pool_swaps
-            if s.is_simple and sandwich.front.position < s.position < sandwich.back.position
+            if s.is_simple and front.position < s.position < sandwich.back.position
         ),
         key=lambda s: s.position,
     )
     victim_ids = {(v.tx_hash, v.log_index) for v in sandwich.victims}
-    reserves = start
+    state = start
     results = []
     try:
         for swap in between:
-            reserves, out = apply_swap(reserves, swap.amount_in, swap.zero_for_one)
+            state, out = trade(state, swap)
             if (swap.tx_hash, swap.log_index) in victim_ids:
                 results.append(VictimLoss(swap.tx_hash, swap.token_out, swap.amount_out, out))
-    except InsufficientLiquidity:
+    except (InsufficientLiquidity, ValueError):
         return results
     return results

@@ -20,19 +20,22 @@ The tool only detects and measures. It never sends transactions, and it needs no
 |---|---|
 | Collector: RPC client, cache, credit counter, block sampler, Parquet tables | built, unit-tested |
 | Uniswap V2 maths (`profit/uniswap_v2.py`) | built, golden-tested on 48 real swaps |
-| Pool verification (CREATE2 check against the Uniswap V2 and SushiSwap factories) | built, tested |
-| Arbitrage detector (V2) | built, tested on synthetic cases |
-| Sandwich detector with victim identification (V2) | built, tested on synthetic cases and 3 real blocks |
+| Uniswap V3 single-range maths (`profit/uniswap_v3.py`, port of SqrtPriceMath/SwapMath) | built, golden-tested on 60 real V3 swaps |
+| Pool verification (CREATE2 check against the Uniswap V2, SushiSwap and Uniswap V3 factories) | built, tested |
+| Arbitrage detector (V2 + V3) | built, tested on synthetic cases |
+| Sandwich detector with victim identification (V2 + V3) | built, tested on synthetic cases and 3 real blocks |
 | Victim loss (counterfactual without the front-run) | built, tested |
 | Realised profit per MEV bundle, ETH pricing, traced sample (`profit/`) | built, golden-tested on 18 real searcher-blocks |
 | RQ1 analytical estimate (pre-block replay) and at-execution formula (`profit/analytical.py`) | built, tested |
 | RQ1 Anvil simulation through a caching local proxy (`profit/simulate.py`, `collector/proxy.py`) | run on 100 bundles: 87 replayed, 95% match actual gross to the wei |
 | RQ2 Mempool Dumpster download, index, visibility table, coverage baseline (`mempool/`) | built, run on the full sample |
-| RQ3 slippage decoder: Router02, SushiSwap router, Universal Router (`mitigation/slippage.py`) | built; 3 of ~61,000 decoded swaps break their own limit |
+| RQ3 slippage decoder: Router02, SushiSwap router, Universal Router (V2 + V3 commands), V3 SwapRouter/SwapRouter02 incl. multicall (`mitigation/slippage.py`) | built; 3 of ~61,000 decoded V2 swaps break their own limit |
 | RQ3 safe-slippage threshold (`mitigation/safe_threshold.py`) | built, tested against brute force |
 | Analyses and figures for RQ1–RQ3 (`analysis/rq1.py`, `rq2.py`, `rq3.py`) | built, run on the full sample |
+| Robustness: sandwich tolerance 10/20/50%, Jan–Mar vs Apr–Jun (`analysis/sensitivity.py`) | built, run |
+| Sandwich risk checker CLI (`mitigation/checker.py`) | built, tested; V2 pools |
 | Manual audit sheets and scoring (`validation/audit.py`, `validation/labels/`) | built; labelling not done |
-| Uniswap V3 decoding | not started |
+| Labelled-data comparison (ZeroMEV) | not possible: ZeroMEV's API was down (26 Oct 2026) |
 
 Headline results, figures and their inputs are rebuilt by `make results` into
 `data/results/` (`rq1_summary.json`, `rq2_summary.json`, `rq3_summary.json`, `figures/`).
@@ -114,7 +117,8 @@ data/results/realised_profit.parquet → analysis/
   (block, searcher) cases this reproduces the searcher's actual ETH + WETH balance change
   exactly. All 37 other-token flows match their balance changes too.
 - **Builder tips sent as internal ETH transfers need traces.** Infura's free tier has no
-  trace methods, so all bundles get the untraced figure (an upper bound). A seeded sample
+  trace methods, so all bundles get the untraced figure, which misses internal ETH in both
+  directions (tips out, ETH received in). A seeded sample
   of 300 bundles is traced through the keyless dRPC endpoint to measure the gap. In one
   2024 golden case the untraced figure was exactly 0.0344 ETH too high: the hidden tip.
 - **Token residuals are priced at the pre-block state.** Prices come from the token's WETH
@@ -139,10 +143,15 @@ data/results/realised_profit.parquet → analysis/
 
 ### Known limitations (so far)
 
-- Only V2-style pools are decoded. Arbitrage that touches a Uniswap V3 pool is not found yet,
-  and 1,478 of 4,158 bundles contain swaps the detectors do not explain (V3 legs and others),
-  so they are left out of realised-profit figures.
-  In the April 2023 smoke run this probably explains why no arbitrage was detected.
+- Uniswap V2, SushiSwap and Uniswap V3 only; other DEXs (Curve, Balancer, aggregators'
+  own pools) are not decoded. Bundles whose transactions contain swaps the detectors do not
+  explain, or token transfers to anything but a detected pool, are left out of realised
+  profit (1,417 of 5,406 bundles).
+- V3 maths is single-range: a V3 replay is only made when the real swaps it rests on kept
+  the active liquidity unchanged. 55% of V3 victims have a computed loss (82% for V2).
+- The safe-slippage threshold uses V2 victims only (constant-product maths).
+- The Anvil simulation sample (100 bundles) was drawn before V3 support; it covers V2
+  sandwich bundles.
 - The arbitrage detector finds contiguous cycles only. It misses split-route arbitrage and
   cycles interleaved with unrelated swaps.
 - Victim loss ignores liquidity changes (Mint/Burn) between the front-run and the victim.
@@ -152,10 +161,12 @@ data/results/realised_profit.parquet → analysis/
 - Untraced realised profit misses internal ETH payments; only the traced sample includes them.
 - RQ3 is observational: private-RPC users may trade differently from public users. The
   regression controls for trade size, not for who the trader is.
-- Only 37.5% of user swaps are decoded (single-hop Router02 / Universal Router calls);
+- 34% of user swaps are decoded (single-hop Uniswap router calls, V2 and V3);
   aggregators and multi-hop trades are not.
-- Residual tokens in pools under 1 ETH deep, or with no Uniswap V2 / SushiSwap WETH pair,
-  stay unpriced. Those bundles still have `realised_eth_only`.
+- Residual tokens in pools under 1 ETH deep, or with no Uniswap WETH pool, stay unpriced.
+  Those bundles still have `realised_eth_only`.
+- No labelled-data comparison yet: ZeroMEV's API was unreachable, so detector validation
+  rests on the manual audit sheets in `validation/labels/`.
 
 ### Installing Foundry (for `make simulate`)
 

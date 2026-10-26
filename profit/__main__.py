@@ -7,9 +7,10 @@ Reads data/results/{arbitrages,sandwiches}.parquet and the Parquet tables, write
 data/results/realised_profit.parquet with one row per bundle (see profit/bundles.py).
 All values are wei of ETH as decimal strings unless named otherwise.
 
-Untraced realised profit misses internal ETH transfers (e.g. coinbase tips) and so is an
-upper bound; the traced sample measures that gap. Traces cost one debug_traceTransaction per
-transaction, so they are fetched only for `profit.trace_sample_size` random bundles.
+Untraced realised profit misses internal ETH transfers (coinbase tips out, ETH paid in),
+so it can be off either way; the traced sample measures that gap. Traces cost one
+debug_traceTransaction per transaction, so they are fetched only for
+`profit.trace_sample_size` random bundles.
 """
 
 import argparse
@@ -30,17 +31,17 @@ from common.constants import (
     PUBLIC_ROUTERS,
     UNISWAP_V2_SWAP_TOPIC,
     UNISWAP_V3_SWAP_TOPIC,
+    WETH,
 )
 from common.nulls import is_missing
 from common.provenance import write_provenance
-from detectors.load import load_swaps
+from detectors.load import build_market, load_swaps
 from detectors.swaps import Swap
 from profit.analytical import (
-    estimate_arbitrage,
-    estimate_sandwich,
-    formula_arbitrage,
-    formula_sandwich,
-    pre_block_reserves,
+    market_estimate_arbitrage,
+    market_estimate_sandwich,
+    market_formula_arbitrage,
+    market_formula_sandwich,
 )
 from profit.bundles import Bundle, Event, group_into_bundles
 from profit.pricing import DEFAULT_MIN_WETH_RESERVE, EthPricer
@@ -85,11 +86,10 @@ def event_amounts(arbitrages: pd.DataFrame, sandwiches: pd.DataFrame) -> Amounts
 
 
 def estimated_amounts(
-    arbitrages: pd.DataFrame, sandwiches: pd.DataFrame, swaps: list[Swap]
+    arbitrages: pd.DataFrame, sandwiches: pd.DataFrame, swaps: list[Swap], market
 ) -> tuple[Amounts, Amounts]:
     """(pre-block estimates, at-execution formula values) per event, in raw token units."""
     by_leg = {(s.tx_hash, s.log_index): s for s in swaps}
-    pre = pre_block_reserves(swaps)
     estimates: Amounts = {}
     formulas: Amounts = {}
 
@@ -105,8 +105,8 @@ def estimated_amounts(
         if None in cycle:
             put(a["event_id"], a["start_token"], None, None)
             continue
-        put(a["event_id"], a["start_token"], estimate_arbitrage(cycle, pre),
-            formula_arbitrage(cycle))  # fmt: skip
+        put(a["event_id"], a["start_token"], market_estimate_arbitrage(market, cycle),
+            market_formula_arbitrage(market, cycle))  # fmt: skip
     for event_id, group in sandwiches.groupby("event_id"):
         first = group.iloc[0]
         front = by_leg.get((first["front_tx"], int(first["front_log_index"])))
@@ -116,8 +116,8 @@ def estimated_amounts(
         if front is None or back is None or None in victims:
             put(event_id, first["token_x"], None, None)
             continue
-        put(event_id, first["token_x"], estimate_sandwich(front, victims, back, pre),
-            formula_sandwich(front, back))  # fmt: skip
+        put(event_id, first["token_x"], market_estimate_sandwich(market, front, victims, back),
+            market_formula_sandwich(market, front, back))  # fmt: skip
     return estimates, formulas
 
 
@@ -172,6 +172,45 @@ def undetected_swap_counts(
     return counts
 
 
+def swap_roles_pools(results) -> dict[str, set[str]]:
+    """tx_hash -> pools of the detected MEV legs in that transaction."""
+    roles = pd.read_parquet(results / "swaps.parquet", columns=["tx_hash", "pool", "role"])
+    legs = roles[roles["role"].isin(MEV_ROLES)]
+    return legs.groupby("tx_hash")["pool"].agg(set).to_dict()
+
+
+def _transfer_pairs(log_groups) -> pd.DataFrame:
+    """(src, dst) of the ERC-20 Transfer rows in the given per-tx log tuples."""
+    rows = [
+        ("0x" + r["topic1"][-40:], "0x" + r["topic2"][-40:])
+        for group in log_groups
+        for r in group
+        if not is_missing(r.get("topic1"))
+        and not is_missing(r.get("topic2"))
+        and is_missing(r.get("topic3"))
+    ]
+    return pd.DataFrame(rows, columns=["src", "dst"])
+
+
+def unexplained_transfer_counts(
+    transfers: pd.DataFrame, actors: set[str], detected_pools: set[str]
+) -> int:
+    """Token transfers between the searcher and anyone other than a detected pool (or WETH).
+
+    `transfers`: ERC-20 Transfer rows (src, dst) of the bundle's transactions. A bundle whose
+    money also moves through other venues (another DEX, a deposit, a tax wallet) has flows
+    the detected swaps cannot explain, so its realised profit is not comparable either.
+    """
+    count = 0
+    for src, dst in zip(transfers["src"], transfers["dst"], strict=True):
+        if (src in actors) == (dst in actors):
+            continue
+        other = dst if src in actors else src
+        if other not in detected_pools and other != WETH:
+            count += 1
+    return count
+
+
 def _str(value: int | None) -> str | None:
     return None if value is None else str(value)
 
@@ -184,10 +223,11 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
     detected = event_amounts(arbitrages, sandwiches)
     bundle_txs = {h for b in bundles for h in b.tx_hashes}
 
-    swaps, logs, txs, _ = load_swaps(config, rpc)
-    estimated, formula = estimated_amounts(arbitrages, sandwiches, swaps)
+    swaps, logs, txs, pools = load_swaps(config, rpc)
+    market = build_market(swaps, logs, pools, rpc)
+    estimated, formula = estimated_amounts(arbitrages, sandwiches, swaps, market)
     min_reserve = int(config.raw.get("profit", {}).get("min_weth_reserve_eth", 10) * 10**18)
-    pricer = EthPricer(swaps, rpc, min_reserve or DEFAULT_MIN_WETH_RESERVE)
+    pricer = EthPricer(swaps, rpc, min_reserve or DEFAULT_MIN_WETH_RESERVE, market)
     blocks = read_table(config.processed_dir, "blocks").set_index("block_number")
     receipts = read_table(config.processed_dir, "receipts").set_index("tx_hash")
     txs = txs[txs["tx_hash"].isin(bundle_txs)].set_index("tx_hash")
@@ -198,6 +238,7 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
     detected_legs = set(zip(mev["tx_hash"], mev["log_index"].astype(int), strict=True))
     logs = logs[logs["tx_hash"].isin(bundle_txs)]
     undetected = undetected_swap_counts(logs, detected_legs)
+    mev_pools = swap_roles_pools(results)
     logs = logs[logs["topic0"] == ERC20_TRANSFER_TOPIC]
     logs_by_tx = {h: tuple(g.to_dict("records")) for h, g in logs.groupby("tx_hash")}
 
@@ -243,6 +284,11 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
             "n_sandwiches": bundle.count("sandwich"),
             "n_arbitrages": bundle.count("arbitrage"),
             "undetected_swaps": sum(undetected.get(h, 0) for h in bundle.tx_hashes),
+            "unexplained_transfers": unexplained_transfer_counts(
+                _transfer_pairs([logs_by_tx.get(h, ()) for h in bundle.tx_hashes]),
+                actors,
+                set().union(*(mev_pools.get(h, set()) for h in bundle.tx_hashes)),
+            ),
             "tx_hashes": list(bundle.tx_hashes),
             "actors": sorted(actors),
             "detector_gross": _str(bundle_value(bundle, detected, pricer)),
@@ -281,7 +327,11 @@ def run(config: Config, rpc: RpcClient, trace_rpc: RpcClient | None) -> dict:
     return {
         "bundles": len(bundles),
         "fully_priced": int(frame["realised_untraced"].notna().sum()) if rows else 0,
-        "fully_explained": int((frame["undetected_swaps"] == 0).sum()) if rows else 0,
+        "fully_explained": int(
+            ((frame["undetected_swaps"] == 0) & (frame["unexplained_transfers"] == 0)).sum()
+        )
+        if rows
+        else 0,
         "traced": int(frame["traced"].sum()) if rows else 0,
         "trace_failures": trace_failures,
         "price_lookup_failures": pricer.lookup_failures,

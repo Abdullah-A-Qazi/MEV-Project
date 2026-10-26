@@ -48,6 +48,17 @@ V2_FACTORIES: dict[str, dict[str, str]] = {
     },
 }
 
+# --- Uniswap V3 -----------------------------------------------------------------------------
+# V3 pools are deployed with CREATE2 too; the salt is keccak(abi.encode(token0, token1, fee)).
+# Checked 26 Oct 2026: these give 0x88e6...5640, the USDC/WETH 0.05% pool.
+
+V3_FACTORIES: dict[str, dict[str, str]] = {
+    "uniswap_v3": {
+        "factory": "0x1f98431c8ad98523631ae4a59f267346ea31f984",
+        "init_code_hash": "0xe34f199b19b2b4f47f68442619d555527d244f78a3297ea89325f843f87b8b54",
+    },
+}
+
 # --- Routers --------------------------------------------------------------------------------
 # Public routers are shared by many unrelated users. Two swaps whose transactions both call
 # the same router are NOT evidence of the same actor, so the sandwich detector must never

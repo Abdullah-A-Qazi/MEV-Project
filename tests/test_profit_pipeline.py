@@ -10,6 +10,7 @@ from profit.__main__ import (
     event_amounts,
     price_flows,
     undetected_swap_counts,
+    unexplained_transfer_counts,
 )
 from profit.bundles import Event, group_into_bundles
 from profit.pricing import EthPricer
@@ -83,3 +84,14 @@ def test_undetected_swaps_are_counted_per_transaction():
     ])  # fmt: skip
     assert undetected_swap_counts(logs, {(A, 1)}) == {A: 1, B: 1}
     assert undetected_swap_counts(logs, {(A, 1), (A, 4), (B, 2)}) == {}
+
+
+def test_transfers_to_venues_other_than_detected_pools_are_counted():
+    bot, eoa, pool, other_dex = "0xb0", "0xe0", "0xp1", "0xd2"
+    transfers = pd.DataFrame(
+        {
+            "src": [bot, pool, bot, other_dex, eoa, bot],
+            "dst": [pool, bot, other_dex, bot, bot, WETH],
+        }
+    )  # to/from detected pool, other DEX x2, inside the searcher, WETH (wrapping)
+    assert unexplained_transfer_counts(transfers, {bot, eoa}, {pool}) == 2

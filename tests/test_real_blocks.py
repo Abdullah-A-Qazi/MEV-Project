@@ -12,7 +12,7 @@ from pathlib import Path
 from collector.pools import PoolInfo
 from detectors.arbitrage import detect_arbitrages
 from detectors.sandwich import detect_sandwiches
-from detectors.swaps import decode_v2_swaps
+from detectors.swaps import decode_swaps
 from profit.uniswap_v2 import get_amount_out
 
 FIXTURE = json.loads(
@@ -23,7 +23,7 @@ JARED = "0x6b75d8af000000e20b7a7ddf000ba900b4009a80"
 
 def decoded_swaps():
     pools = {p["address"]: PoolInfo(**p) for p in FIXTURE["pools"]}
-    return decode_v2_swaps(FIXTURE["logs"], FIXTURE["txs"], pools, ["uniswap_v2", "sushiswap"])
+    return decode_swaps(FIXTURE["logs"], FIXTURE["txs"], pools, ["uniswap_v2", "sushiswap"])
 
 
 def test_every_real_swap_has_reserves_and_is_priced_by_the_v2_formula():

@@ -46,6 +46,7 @@ def decompose(frame: pd.DataFrame, traced: bool = False) -> pd.DataFrame:
     """One row per usable bundle with the estimate, realised profit and the five parts."""
     usable = frame[
         (frame["undetected_swaps"] == 0)
+        & (frame.get("unexplained_transfers", 0) == 0)
         & frame["realised_untraced"].notna()
         & frame["analytical_estimate"].notna()
         & frame["detector_gross"].notna()

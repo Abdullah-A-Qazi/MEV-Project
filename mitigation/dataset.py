@@ -26,11 +26,18 @@ from collector.rpc import RpcClient
 from common.config import load_config
 from common.constants import WETH
 from common.nulls import is_missing
-from detectors.load import load_swaps
+from detectors.load import build_market, load_swaps
 from detectors.swaps import Swap
-from mitigation.slippage import decode_limits, reserves_in_out, slippage_tolerance
-from profit.analytical import pre_block_reserves
+from mitigation.slippage import decode_limits, slippage_tolerance, slippage_tolerance_v3
 from profit.pricing import EthPricer
+
+
+def _limit_matches(lim, swap: Swap, fees: dict[str, int]) -> bool:
+    if (swap.token_in, swap.token_out) != lim.path or not swap.is_simple:
+        return False
+    if lim.protocol == "v3":
+        return swap.is_v3 and lim.fees == (fees.get(swap.pool),)
+    return not swap.is_v3
 
 
 def user_swap_rows(
@@ -40,8 +47,8 @@ def user_swap_rows(
     public: dict[str, bool],
     losses: dict[tuple[str, int], tuple[str, int]],
     pricer: EthPricer,
+    market,
 ) -> list[dict]:
-    pre = pre_block_reserves(swaps)
     by_tx: dict[str, list[Swap]] = {}
     for swap in swaps:
         if roles.get((swap.tx_hash, swap.log_index), "other") in ("other", "sandwich_victim"):
@@ -55,9 +62,7 @@ def user_swap_rows(
                   if len(lim.path) == 2]  # fmt: skip
         matched: dict[tuple[str, int], object] = {}
         for lim in limits:
-            same_pair = [
-                s for s in tx_swaps if (s.token_in, s.token_out) == lim.path and s.is_simple
-            ]
+            same_pair = [s for s in tx_swaps if _limit_matches(lim, s, market.fees)]
             if same_pair:
                 last = max(same_pair, key=lambda s: s.log_index)
                 matched[(last.tx_hash, last.log_index)] = lim
@@ -65,20 +70,33 @@ def user_swap_rows(
             if not swap.is_simple:
                 continue
             key = (swap.tx_hash, swap.log_index)
-            reserves = pre.get((swap.block_number, swap.pool))
-            r_in, r_out = reserves_in_out(reserves, swap.zero_for_one) if reserves else (0, 0)
+            state = market.pre_block(swap.block_number, swap.pool)
+            if swap.is_v3 and state is not None:
+                # Single-range check: the pool's real swaps up to this one kept the start's L.
+                path = [s for s in market.v3._by_pool.get((swap.block_number, swap.pool), [])
+                        if s.position <= swap.position]  # fmt: skip
+                if not market.trusted_v3_path(state, path):
+                    state = None
+            r_in, r_out = market.depth(state, swap.zero_for_one) if state is not None else (0, 0)
             lim = matched.get(key)
-            tolerance = (
-                slippage_tolerance(lim, swap.amount_in, swap.amount_out, r_in, r_out)
-                if lim is not None and r_in
-                else None
-            )
+            tolerance = None
+            if lim is not None and state is not None:
+                if swap.is_v3:
+                    tolerance = slippage_tolerance_v3(
+                        lim, swap.amount_in, swap.amount_out, state, swap.zero_for_one,
+                        market.fees[swap.pool],
+                    )  # fmt: skip
+                else:
+                    tolerance = slippage_tolerance(
+                        lim, swap.amount_in, swap.amount_out, r_in, r_out
+                    )
             loss = losses.get(key)
             rows.append({
                 "tx_hash": swap.tx_hash,
                 "log_index": swap.log_index,
                 "block_number": swap.block_number,
                 "pool": swap.pool,
+                "protocol": "v3" if swap.is_v3 else "v2",
                 "sandwiched": roles.get(key) == "sandwich_victim",
                 "public": public.get(swap.tx_hash, False),
                 "decoded": lim is not None,
@@ -101,7 +119,9 @@ def main() -> None:
     config = load_config()
     results = config.data_dir / "results"
     rpc = RpcClient([], RpcCache(config.cache_path), CreditLedger(config.ledger_path), offline=True)
-    swaps, _, txs, _ = load_swaps(config, rpc)
+    swaps, logs, txs, pools = load_swaps(config, rpc)
+    # No RPC: V3 pre-block states are worked back from each pool's first swap in the block.
+    market = build_market(swaps, logs, pools, None)
     role_table = pd.read_parquet(
         results / "swaps.parquet", columns=["tx_hash", "log_index", "role"]
     )
@@ -116,8 +136,8 @@ def main() -> None:
         ].itertuples(index=False)
     }
     txs = txs.set_index("tx_hash")[["to", "input", "value"]]
-    pricer = EthPricer(swaps)  # pre-block prices from the sample's own swaps, no network
-    frame = pd.DataFrame(user_swap_rows(swaps, roles, txs, public, losses, pricer))
+    pricer = EthPricer(swaps, market=market)  # pre-block prices from the sample, no network
+    frame = pd.DataFrame(user_swap_rows(swaps, roles, txs, public, losses, pricer, market))
     for col in ("amount_in_eth", "loss_eth"):
         frame[col] = frame[col].astype("float64") / 1e18
     frame.to_parquet(results / "user_swaps.parquet", index=False)

@@ -13,7 +13,7 @@ from common.constants import (
     V2_FACTORIES,
     V2_ROUTER_SWAP_FUNCTIONS,
 )
-from detectors.swaps import decode_v2_swaps
+from detectors.swaps import decode_swaps
 
 GOLDEN = json.loads((Path(__file__).parent / "fixtures" / "uniswap_v2_golden.json").read_text())
 
@@ -111,7 +111,7 @@ def test_decode_v2_swap_pairs_with_preceding_sync():
         "0x" + "99" * 20: PoolInfo("0x" + "99" * 20, tok0, tok1, "unknown"),
     }
     txs = {tx: {"from": "0x" + "44" * 20, "to": "0x" + "55" * 20}}
-    [swap] = decode_v2_swaps(logs, txs, pools)  # the unverified pool is dropped
+    [swap] = decode_swaps(logs, txs, pools)  # the unverified pool is dropped
     assert swap.zero_for_one and swap.is_simple
     assert (swap.token_in, swap.token_out) == (tok0, tok1)
     assert (swap.amount_in, swap.amount_out) == (100, 90)
@@ -195,3 +195,37 @@ def test_detectors_refuse_to_run_with_unresolved_pools(tmp_path):
     with pytest.raises(IncompletePools):
         load_pools(config, logs, offline)
     assert load_pools(config, logs, offline, allow_missing=True) == {}
+
+
+def test_v3_pool_address_matches_the_real_usdc_weth_pool():
+    from collector.pools import identify_v3_dex
+
+    usdc, weth = (
+        "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    )
+    assert (
+        identify_v3_dex("0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640", usdc, weth, 500)
+        == "uniswap_v3"
+    )
+    assert (
+        identify_v3_dex("0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640", usdc, weth, 3000) == "unknown"
+    )
+
+
+def test_decode_v3_swap_signed_amounts_and_state():
+    pool, tok0, tok1 = "0x" + "21" * 20, "0x" + "aa" * 20, "0x" + "bb" * 20
+    neg = lambda n: (1 << 256) - n  # noqa: E731 (two's complement word)
+    data = "0x" + _word(500) + _word(neg(1_234)) + _word(79228162514264337593543950336) \
+        + _word(10**18) + _word(neg(5))  # fmt: skip
+    logs = [{"block_number": 9, "tx_index": 2, "tx_hash": "0x" + "cd" * 32, "log_index": 7,
+             "address": pool, "topic0": UNISWAP_V3_SWAP_TOPIC,
+             "topic1": _topic_addr("0x" + "22" * 20), "topic2": _topic_addr("0x" + "33" * 20),
+             "topic3": None, "data": data}]  # fmt: skip
+    pools = {pool: PoolInfo(pool, tok0, tok1, "uniswap_v3", 500)}
+    [swap] = decode_swaps(logs, {}, pools)
+    assert swap.is_v3 and swap.zero_for_one and swap.is_simple
+    assert (swap.amount_in, swap.amount_out) == (500, 1_234)
+    assert swap.sqrt_price_after == 1 << 96 and swap.liquidity_after == 10**18
+    assert swap.tick_after == -5
+    assert swap.reserves_before is None  # V3 has no reserves

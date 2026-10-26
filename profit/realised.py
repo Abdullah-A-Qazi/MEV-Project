@@ -15,9 +15,10 @@ Transfer for deposit/withdraw (only Deposit/Withdrawal events), and the matching
 between S and the WETH contract are skipped as well. Neither changes what S holds.
 
 Without a trace, ETH that the bot contract sends internally (typically a "coinbase transfer"
-tipping the builder) is invisible, so untraced realised profit is an UPPER bound. The traced
-sample measures how large that gap is (RQ1). tests/test_realised_golden.py checks this
-accounting against real balance changes of a searcher over whole blocks.
+tipping the builder, or ETH a contract pays the bot) is invisible, so untraced realised
+profit can be off in either direction. The traced sample measures the gap (RQ1).
+tests/test_realised_golden.py checks this accounting against real balance changes of a
+searcher over whole blocks.
 """
 
 from collections import defaultdict

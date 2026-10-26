@@ -25,7 +25,7 @@ from collector.credits import CreditLedger
 from collector.rpc import RpcClient
 from common.config import Config, load_config
 from detectors.arbitrage import Arbitrage, detect_arbitrages
-from detectors.load import load_swaps
+from detectors.load import build_market, load_swaps
 from detectors.sandwich import Sandwich, detect_sandwiches
 from detectors.swaps import Swap
 from mitigation.victim_loss import victim_losses
@@ -45,14 +45,17 @@ def sandwich_event_id(s: Sandwich) -> str:
 
 def _swap_row(swap: Swap, role: str) -> dict:
     row = {k: v for k, v in asdict(swap).items() if k != "reserves_after"}
-    for key in ("amount0_in", "amount1_in", "amount0_out", "amount1_out"):
-        row[key] = str(row[key])
+    # uint256 / uint160 / uint128 values overflow Parquet's int64: store them as text.
+    for key in ("amount0_in", "amount1_in", "amount0_out", "amount1_out",
+                "sqrt_price_after", "liquidity_after"):  # fmt: skip
+        row[key] = None if row[key] is None else str(row[key])
     row["role"] = role
     return row
 
 
 def run(config: Config, rpc: RpcClient, allow_missing_pools: bool = False) -> dict[str, int]:
     swaps, logs, _, pools = load_swaps(config, rpc, allow_missing_pools)
+    market = build_market(swaps, logs, pools, rpc)
     arbitrages = detect_arbitrages(swaps)
     tolerance = config.detectors.get("sandwich", {}).get("amount_tolerance", 0.2)
     sandwiches = detect_sandwiches(swaps, tolerance)
@@ -76,7 +79,8 @@ def run(config: Config, rpc: RpcClient, allow_missing_pools: bool = False) -> di
         roles[(s.front.tx_hash, s.front.log_index)] = "sandwich_front"
         roles[(s.back.tx_hash, s.back.log_index)] = "sandwich_back"
         losses = {
-            v.victim_tx_hash: v for v in victim_losses(s, by_block_pool[(s.block_number, s.pool)])
+            v.victim_tx_hash: v
+            for v in victim_losses(s, by_block_pool[(s.block_number, s.pool)], market)
         }
         for victim in s.victims:
             roles[(victim.tx_hash, victim.log_index)] = "sandwich_victim"
@@ -133,7 +137,8 @@ def run(config: Config, rpc: RpcClient, allow_missing_pools: bool = False) -> di
 
     return {
         "blocks": int(logs["block_number"].nunique()),
-        "v2_swaps": len(swaps),
+        "swaps": len(swaps),
+        "v3_swaps": sum(s.is_v3 for s in swaps),
         "pools_verified": sum(p.dex != "unknown" for p in pools.values()),
         "pools_unknown": sum(p.dex == "unknown" for p in pools.values()),
         "arbitrages": len(arbitrages),
