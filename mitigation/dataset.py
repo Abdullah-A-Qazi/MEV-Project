@@ -1,7 +1,8 @@
 """One row per ordinary user swap, with everything RQ3 compares (python -m mitigation.dataset).
 
-Population: every Uniswap V2 / SushiSwap swap in the sample that is not a leg of a detected
-arbitrage or sandwich, i.e. role "other" (not attacked) or "sandwich_victim" (attacked).
+Population: every Uniswap V2 / SushiSwap / Uniswap V3 swap in the sample that is not a leg of
+a detected arbitrage or sandwich, i.e. role "other" (not attacked) or "sandwich_victim"
+(attacked).
 
 Columns:
   sandwiched        the swap is a detected sandwich victim

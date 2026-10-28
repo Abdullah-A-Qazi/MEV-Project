@@ -203,11 +203,11 @@ proxy, so a rerun costs no credits.
 ```
 collector/   RPC client, cache, credit ledger, sampler, pools, pipeline (python -m collector)
 detectors/   swap decoding, arbitrage, sandwich (python -m detectors)
-profit/      AMM maths, realised profit, ETH pricing, bundles (python -m profit)
-mitigation/  victim loss (slippage decoder and analysis to come)
-mempool/     Mempool Dumpster matcher (to come)
-validation/  fixture builders, labelled-data comparison and audit samples
-analysis/    statistics (bootstrap CIs) and result summaries
-common/      config, constants, provenance
+profit/      V2 + V3 maths, bundles, realised profit, pricing, RQ1 estimates, Anvil replay
+mitigation/  victim loss, slippage decoder, user-swap dataset, safe threshold, risk checker
+mempool/     Mempool Dumpster download and index, visibility table
+validation/  fixture builders, audit sheets and scoring, AI-run audit
+analysis/    statistics (bootstrap and Wilson CIs), RQ1-RQ3 analyses, sensitivity, summaries
+common/      config, constants, provenance, shared routers, missing-value check
 tests/       pytest suite; fixtures/ are committed
 ```

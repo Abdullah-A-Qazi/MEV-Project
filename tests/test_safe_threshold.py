@@ -58,3 +58,14 @@ def test_checker_assessment_is_consistent():
     assert loose["worth_attacking"] and not safe["worth_attacking"]
     assert loose["max_attacker_profit"] > safe["max_attacker_profit"]
     assert abs(loose["size_vs_pool"] - VICTIM / R_IN) < 1e-12
+
+
+def test_checker_gas_default_follows_the_results(tmp_path):
+    import json
+
+    from mitigation.checker import DEFAULT_ATTACK_GAS, default_attack_gas
+
+    assert default_attack_gas(tmp_path) == DEFAULT_ATTACK_GAS  # no results yet
+    summary = {"safe_threshold": {"attack_gas_median": 401_234.0}}
+    (tmp_path / "rq3_summary.json").write_text(json.dumps(summary))
+    assert default_attack_gas(tmp_path) == 401_234

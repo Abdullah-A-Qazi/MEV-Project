@@ -10,8 +10,8 @@ token, and the final output amount of A is larger than the first input amount of
 
 Only data already saved locally is used (no RPC calls). Known limitations, to be quantified
 in validation: cycles that interleave with unrelated swaps, or that split the trade across
-parallel paths, are not found; swaps on DEXs we do not decode yet (e.g. Uniswap V3) break
-the cycle and hide the arbitrage.
+parallel paths, are not found; swaps on DEXs we do not decode (anything but Uniswap V2,
+SushiSwap and Uniswap V3, e.g. Curve or Balancer) break the cycle and hide the arbitrage.
 """
 
 from collections import defaultdict

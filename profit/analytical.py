@@ -6,8 +6,8 @@ Two estimates per event, both in the event's own token (start token / token X):
   previous block, i.e. each pool's reserves before its first swap in the block. Earlier
   transactions in the same block are ignored, because a searcher bidding for a position
   cannot know them. The bot's own trade sizes are used as executed.
-* `formula_*` (at execution): the same trades priced with the Uniswap V2 formula on the
-  reserves each swap actually met.
+* `formula_*` (at execution): the same trades priced with the pool's own formula (V2, or
+  single-range V3 via profit/market.py) on the state each swap actually met.
 
 Together with the actual gross (from the swap events) they split the gap exactly:
 

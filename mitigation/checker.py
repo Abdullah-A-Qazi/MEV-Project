@@ -13,6 +13,8 @@ It only reads chain state. It never signs or sends anything.
 """
 
 import argparse
+import json
+from pathlib import Path
 
 from collector.cache import RpcCache
 from collector.credits import CreditLedger
@@ -25,9 +27,18 @@ from profit.uniswap_v2 import get_amount_out
 GET_RESERVES = function_selector("getReserves()")
 TOKEN0 = function_selector("token0()")
 DECIMALS = function_selector("decimals()")
-# Median gas of a detected sandwich (front-run + back-run) in the 2024 sample; see
-# data/results/rq3_summary.json -> safe_threshold.attack_gas_median.
-DEFAULT_ATTACK_GAS = 380_008
+# Median gas of a detected sandwich (front-run + back-run) in the 2024 sample, as of the
+# 26 Oct 2026 results. Used only when data/results/rq3_summary.json is not available.
+DEFAULT_ATTACK_GAS = 380_587
+
+
+def default_attack_gas(results_dir: Path) -> int:
+    """The attack gas median from the latest RQ3 results, so the checker cannot go stale."""
+    try:
+        summary = json.loads((results_dir / "rq3_summary.json").read_text())
+        return int(summary["safe_threshold"]["attack_gas_median"])
+    except (OSError, KeyError, TypeError, ValueError):
+        return DEFAULT_ATTACK_GAS
 
 
 def assess(amount_in: int, r_in: int, r_out: int, slippage: float, gas_cost: int) -> dict:
@@ -50,11 +61,18 @@ def main() -> None:
     parser.add_argument("--sell", required=True, help="address of the token you sell")
     parser.add_argument("--amount", type=float, required=True, help="amount sold, in tokens")
     parser.add_argument("--slippage", type=float, required=True, help="tolerance in percent")
-    parser.add_argument("--gas", type=int, default=DEFAULT_ATTACK_GAS, help="attack gas used")
+    parser.add_argument(
+        "--gas",
+        type=int,
+        default=None,
+        help="attack gas used (default: the sample's median attack gas)",
+    )
     parser.add_argument("--provider", nargs="+", default=["infura"])
     args = parser.parse_args()
 
     config = load_config()
+    if args.gas is None:
+        args.gas = default_attack_gas(config.data_dir / "results")
     rpc = RpcClient(config.providers(args.provider), RpcCache(config.cache_path),
                     CreditLedger(config.ledger_path))  # fmt: skip
     pool, sell = args.pool.lower(), args.sell.lower()
